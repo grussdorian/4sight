@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <title>4sight -- Graph Builder</title>
-  <link rel="stylesheet" href="/static/builder.css">
+  <link rel="stylesheet" href="/static/builder.css?v=3">
 </head>
 <body>
   <div id="toolbar">
@@ -30,6 +30,8 @@
         <input id="panel-adapter" placeholder="csv">
         <label>Query</label>
         <textarea id="panel-query" placeholder="SQL or file path"></textarea>
+        <label>Current readings (from data source)</label>
+        <div id="panel-readings" style="font-size:12px;color:#1f2937;"></div>
       </div>
       <label>Description</label>
       <textarea id="panel-desc" placeholder="Describe this task"></textarea>
@@ -51,9 +53,11 @@
         <div id="panel-outbound-signal" style="font-size:12px;color:#6b7280;"></div>
       </div>
 
-      <!-- Chroma-grounded LLM context summary -->
-      <label>Context (vector search + LLM)</label>
-      <div id="panel-context" style="font-size:12px;color:#6b7280;font-style:italic;"></div>
+      <!-- Chroma-grounded LLM context summary (unstructured sources + tasks only) -->
+      <div id="panel-context-section" style="display:none;">
+        <label>Context (vector search + LLM)</label>
+        <div id="panel-context" style="font-size:12px;color:#6b7280;font-style:italic;"></div>
+      </div>
 
       <div style="display:flex;gap:8px;margin-top:8px;">
         <button onclick="saveNodePanel()" style="flex:1;background:#1a3a5c;color:#e6e6e6;border:1px solid #2a5a8c;border-radius:6px;padding:8px;cursor:pointer;">Save</button>
@@ -68,7 +72,7 @@
       </div>
     </div>
   </div>
-  <script src="/static/builder.js"></script>
+  <script src="/static/builder.js?v=3"></script>
   <script>init();</script>
 </body>
 </html>

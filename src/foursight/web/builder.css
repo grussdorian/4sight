@@ -33,6 +33,19 @@ body { font-family: system-ui, sans-serif; background:#f3f4f6; color:#1f2937; ov
 .edge-dragging { stroke:#1d4ed8; stroke-width:2; stroke-dasharray:4 2; }
 
 /* Field rule rows */
+.reading-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  margin: 2px 0;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  font-size: 12px;
+}
+.reading-item b { color: #1d4ed8; }
+
 .field-rule-row {
   display: flex;
   flex-wrap: wrap;

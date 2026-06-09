@@ -427,7 +427,13 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
             "severity": node.current.llm_verdict.severity.value if node.current else None,
             "adapter_id": node.data_binding.adapter_id if node.data_binding else "",
             "query": node.data_binding.query if node.data_binding else "",
-            "field_rules": [fr.model_dump(mode="json") for fr in (node.data_binding.field_rules if node.data_binding else [])],
+            # Hide the internal generic effect_score ladder; show only the real
+            # graded field rules (at most one per severity band).
+            "field_rules": [
+                fr.model_dump(mode="json")
+                for fr in (node.data_binding.field_rules if node.data_binding else [])
+                if fr.field not in {"effect_score", "capacity_drop_pct", "single_owner", "data_age_h"}
+            ],
             "raw_values": node.data_binding.raw_values if node.data_binding else {},
             # Inbound = the signals of this node's INPUTS (influence predecessors),
             # computed live so it is correct regardless of assessment path/order.

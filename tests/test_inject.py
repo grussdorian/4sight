@@ -105,3 +105,13 @@ def test_logistics_inbound_excludes_consumers():
     inbound_src = {s["source_node"] for s in log["inbound_signals"]}
     assert inbound_src <= {"taipei_freight", "singapore_freight", "bunker_fuel"}, inbound_src
     assert "supply_chain" not in inbound_src and "eng_ops" not in inbound_src
+
+
+def test_panel_hides_generic_ladder_and_shows_readings():
+    c = _client()
+    c.get("/builder/graph")  # assess (populates raw_values)
+    d = c.get("/builder/nodes/sumco_yield").json()
+    fields = {fr["field"] for fr in d["field_rules"]}
+    assert fields == {"yield_pct"}, fields          # only real graded rules, <=4
+    assert len(d["field_rules"]) <= 4
+    assert d["raw_values"].get("yield_pct") is not None  # current reading present

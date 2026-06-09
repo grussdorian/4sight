@@ -457,30 +457,65 @@ function collectFieldRules(){
   return rules;
 }
 
+// At most one rule per severity band (LOW/MEDIUM/HIGH/CRITICAL).
+var MAX_FIELD_RULES=4;
+
+function fieldRuleRowHTML(fr){
+  fr=fr||{};
+  var isStructured=fr.kind!=="unstructured";
+  function op(v){return fr.operator===v?" selected":"";}
+  function sv(v){return fr.severity_on_breach===v?" selected":"";}
+  var medDefault=fr.severity_on_breach?sv("medium"):" selected";
+  return ''+
+    '<input class="fr-field" type="text" placeholder="field name" value="'+esc(fr.field||"")+'">'+
+    '<select class="fr-kind" onchange="toggleFrKind(this)">'+
+      '<option value="structured"'+(isStructured?" selected":"")+'>structured</option>'+
+      '<option value="unstructured"'+(isStructured?"":" selected")+'>unstructured</option>'+
+    '</select>'+
+    '<span class="fr-structured-opts" style="display:'+(isStructured?"":"none")+'">'+
+      '<select class="fr-op">'+
+        '<option value="<"'+op("<")+'><</option>'+
+        '<option value=">"'+op(">")+'>></option>'+
+        '<option value="<="'+op("<=")+'>&le;</option>'+
+        '<option value=">="'+op(">=")+'>&ge;</option>'+
+        '<option value="=="'+op("==")+'>=</option>'+
+      '</select>'+
+      '<input class="fr-expected" type="number" placeholder="val" value="'+(fr.expected!=null?fr.expected:"")+'">'+
+    '</span>'+
+    '<select class="fr-severity">'+
+      '<option value="low"'+sv("low")+'>Low</option>'+
+      '<option value="medium"'+medDefault+'>Medium</option>'+
+      '<option value="high"'+sv("high")+'>High</option>'+
+      '<option value="critical"'+sv("critical")+'>Critical</option>'+
+    '</select>'+
+    '<button class="fr-delete" title="remove" onclick="deleteFieldRule(this)">&times;</button>';
+}
+
+function fieldRuleCount(){
+  return document.querySelectorAll("#panel-field-rules .field-rule-row").length;
+}
+
+function refreshAddFieldRuleBtn(){
+  var btn=document.getElementById("btn-add-field-rule");
+  if(!btn) return;
+  btn.disabled=fieldRuleCount()>=MAX_FIELD_RULES;
+  btn.style.opacity=btn.disabled?"0.4":"1";
+  btn.style.cursor=btn.disabled?"not-allowed":"pointer";
+}
+
 function addFieldRule(){
+  if(fieldRuleCount()>=MAX_FIELD_RULES) return;
   var container=document.getElementById("panel-field-rules");
   var row=document.createElement("div");
   row.className="field-rule-row";
-  row.innerHTML=
-    '<input class="fr-field" type="text" placeholder="field name" style="flex:1;min-width:60px;">'+
-    '<select class="fr-kind" onchange="toggleFrKind(this)">'+
-      '<option value="structured">structured</option>'+
-      '<option value="unstructured">unstructured</option>'+
-    '</select>'+
-    '<span class="fr-structured-opts">'+
-      '<select class="fr-op"><option value="<"><</option><option value=">">></option>'+
-      '<option value="<=">&le;</option><option value=">=">&ge;</option>'+
-      '<option value="==">=</option></select>'+
-      '<input class="fr-expected" type="number" placeholder="val" style="width:50px;">'+
-    '</span>'+
-    '<select class="fr-severity">'+
-      '<option value="low">Low</option>'+
-      '<option value="medium" selected>Medium</option>'+
-      '<option value="high">High</option>'+
-      '<option value="critical">Critical</option>'+
-    '</select>'+
-    '<button class="fr-delete" onclick="this.closest(\'.field-rule-row\').remove()">&times;</button>';
+  row.innerHTML=fieldRuleRowHTML({});
   container.appendChild(row);
+  refreshAddFieldRuleBtn();
+}
+
+function deleteFieldRule(btn){
+  btn.closest(".field-rule-row").remove();
+  refreshAddFieldRuleBtn();
 }
 
 function toggleFrKind(sel){
@@ -491,36 +526,13 @@ function toggleFrKind(sel){
 function renderFieldRules(fieldRules){
   var container=document.getElementById("panel-field-rules");
   container.innerHTML="";
-  if(!fieldRules||!fieldRules.length) return;
-  fieldRules.forEach(function(fr){
+  (fieldRules||[]).forEach(function(fr){
     var row=document.createElement("div");
     row.className="field-rule-row";
-    var isStructured=fr.kind!=="unstructured";
-    row.innerHTML=
-      '<input class="fr-field" type="text" value="'+esc(fr.field||"")+'" style="flex:1;min-width:60px;">'+
-      '<select class="fr-kind" onchange="toggleFrKind(this)">'+
-        '<option value="structured"'+(isStructured?" selected":"")+'>structured</option>'+
-        '<option value="unstructured"'+(isStructured?"":" selected")+'>unstructured</option>'+
-      '</select>'+
-      '<span class="fr-structured-opts" style="display:'+(isStructured?"":"none")+'">'+
-        '<select class="fr-op">'+
-          '<option value="<"'+(fr.operator==="<"?" selected":"")+'><</option>'+
-          '<option value=">"'+(fr.operator===">"?" selected":"")+'>></option>'+
-          '<option value="<="'+(fr.operator==="<="?" selected":"")+'>&le;</option>'+
-          '<option value=">="'+(fr.operator===">="?" selected":"")+'>&ge;</option>'+
-          '<option value="=="'+(fr.operator==="=="?" selected":"")+'>=</option>'+
-        '</select>'+
-        '<input class="fr-expected" type="number" value="'+(fr.expected||0)+'" style="width:50px;">'+
-      '</span>'+
-      '<select class="fr-severity">'+
-        '<option value="low"'+(fr.severity_on_breach==="low"?" selected":"")+'>Low</option>'+
-        '<option value="medium"'+(fr.severity_on_breach==="medium"?" selected":"")+'>Medium</option>'+
-        '<option value="high"'+(fr.severity_on_breach==="high"?" selected":"")+'>High</option>'+
-        '<option value="critical"'+(fr.severity_on_breach==="critical"?" selected":"")+'>Critical</option>'+
-      '</select>'+
-      '<button class="fr-delete" onclick="this.closest(\'.field-rule-row\').remove()">&times;</button>';
+    row.innerHTML=fieldRuleRowHTML(fr);
     container.appendChild(row);
   });
+  refreshAddFieldRuleBtn();
 }
 
 // --- Signal display ---
@@ -578,6 +590,7 @@ function selectNode(nid){
     // Surface the SQL query for data-source (leaf) nodes.
     document.getElementById("panel-adapter").value=d.adapter_id||"";
     document.getElementById("panel-query").value=d.query||"";
+    renderReadings(d.raw_values||{});
     renderFieldRules(d.field_rules||[]);
     renderSignals(d.inbound_signals||[], d.outbound_signal);
     // Direction-correct: "I depend on" = inputs (what flows into this node);
@@ -591,9 +604,27 @@ function selectNode(nid){
     document.getElementById("panel-dependents").innerHTML=depOnMe.map(function(r){
       return "<div class='rel-item' style='cursor:pointer;' onclick='drillToNode(\""+r.id+"\")'>"+esc(titleFor(r.id))+"</div>";
     }).join("")||"<span style='opacity:0.4;'>none</span>";
-    loadNodeContext(nid);
+    // Context (vector search + LLM) is for UNSTRUCTURED sources and tasks only.
+    // A SQL data source (has a query) is structured -- no vector search.
+    var section=document.getElementById("panel-context-section");
+    if(d.query){
+      section.style.display="none";
+    }else{
+      section.style.display="block";
+      loadNodeContext(nid);
+    }
   }).catch(function(){});
   render();
+}
+
+function renderReadings(rawValues){
+  var el=document.getElementById("panel-readings");
+  if(!el) return;
+  var keys=Object.keys(rawValues||{});
+  if(!keys.length){ el.innerHTML="<span style='opacity:0.4;'>no readings yet</span>"; return; }
+  el.innerHTML=keys.map(function(k){
+    return "<div class='reading-item'><span>"+esc(k)+"</span><b>"+esc(String(rawValues[k]))+"</b></div>";
+  }).join("");
 }
 
 function drillToNode(nid){
