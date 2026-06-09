@@ -10,21 +10,26 @@ from foursight.seed import load_supply_chain
 
 
 class SpyLLM:
-    """Batch-capable LLM (model != 'fake') that records call counts. Per-node
-    methods raise so any per-node assessment is caught."""
-    def __init__(self):
+    """Batch-capable LLM (model != 'fake') that records calls and prompts.
+    Per-node methods raise so any per-node assessment is caught."""
+    def __init__(self, severity="high"):
         self.model = "spy"
         self.batch_calls = 0
+        self.prompts = []
+        self.severity = severity
 
     def batch_assess(self, system, prompt):
         self.batch_calls += 1
+        self.prompts.append(prompt)
+        # Only the NODE HEADER ids ("... id=X)") are the nodes to score; input
+        # references read "id=X, weight=...".
         ids = []
-        for m in re.findall(r"id=([A-Za-z0-9_]+)", prompt):
+        for m in re.findall(r"id=([A-Za-z0-9_]+)\)", prompt):
             if m not in ids:
                 ids.append(m)
         return json.dumps([
-            {"node_id": i, "final_score": 80.0, "severity": "high",
-             "rationale": "spy synthesis", "summary": "spy summary"}
+            {"node_id": i, "final_score": 80.0, "severity": self.severity,
+             "rationale": "spy synthesis"}
             for i in ids
         ])
 
@@ -91,3 +96,36 @@ def test_inbound_signals_computed_from_influence_after_batch():
     inbound_src = {s["source_node"] for s in log["inbound_signals"]}
     assert inbound_src == {"taipei_freight", "singapore_freight", "bunker_fuel"}, inbound_src
     assert "supply_chain" not in inbound_src and "eng_ops" not in inbound_src
+
+
+def test_assessment_only_rescore_changed_cone():
+    # After the first full assessment, editing one leaf re-scores only that
+    # leaf's influence cone; unrelated branches keep their severity.
+    spy = SpyLLM(severity="critical")
+    c = TestClient(build_app(seed_fn=load_supply_chain, llm=spy))
+    g1 = c.post("/assess").json()
+    sev1 = {n["id"]: n["severity"] for n in g1["nodes"]}
+    assert sev1["logistics"] == "critical" and sev1["fab17_output"] == "critical"
+
+    spy.severity = "low"
+    spy.prompts.clear()
+    c.post("/node/bob_taylor/readings", json={"readings": {"capacity_pct": 30}})
+    g2 = c.post("/assess").json()
+    sev2 = {n["id"]: n["severity"] for n in g2["nodes"]}
+
+    assert len(spy.prompts) == 1, "expected exactly one batch call for the cone"
+    # bob_taylor's cone (workforce, packaging -> eng_ops -> fab17) was re-scored.
+    assert sev2["workforce"] == "low"
+    assert sev2["fab17_output"] == "low"
+    # The logistics branch was NOT touched and keeps its prior severity.
+    assert sev2["logistics"] == "critical"
+    assert sev2["sumco_yield"] == "critical"
+
+
+def test_no_change_means_no_rescore():
+    spy = SpyLLM(severity="high")
+    c = TestClient(build_app(seed_fn=load_supply_chain, llm=spy))
+    c.post("/assess")
+    calls = spy.batch_calls
+    c.post("/assess")  # nothing changed
+    assert spy.batch_calls == calls, "re-assessment with no change must not call the LLM"

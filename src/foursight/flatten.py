@@ -16,10 +16,15 @@ def assessment_from_batch(node: Node, entry: dict) -> Assessment:
     the graph (every later node.current.llm_verdict access blew up). This
     builds a proper, version-bumped Assessment with a propagating Signal.
     """
-    score = float(entry.get("final_score", 0.0))
-    sev_str = entry.get("severity", "")
+    raw_score = entry.get("final_score", entry.get("score", 0.0))
+    try:
+        score = float(raw_score)
+    except (TypeError, ValueError):
+        score = 0.0
+    score = max(0.0, min(100.0, score))
+    sev_str = str(entry.get("severity", "")).lower()
     severity = Severity(sev_str) if sev_str in [s.value for s in Severity] else severity_from_score(score)
-    rationale = entry.get("rationale") or entry.get("summary", "")
+    rationale = entry.get("rationale") or entry.get("summary") or ""
 
     prev = node.current
     version = (prev.version + 1) if isinstance(prev, Assessment) else 1
@@ -58,13 +63,19 @@ class FlattenEngine:
             f"Node: {node.title} (kind={node.kind.value}, id={node.id})",
             f"Description: {node.description or 'none'}",
         ]
-        # Structure by influence direction: inputs feed this node; it feeds its
-        # consumers. (Edge orientation varies, so we use the influence graph.)
+        # Structure by influence direction: inputs feed this node. Each input's
+        # CURRENT signal is included so the node can be scored even when its
+        # inputs are not part of this (delta) batch.
         preds = self.store.influence_predecessors(node.id)
         if preds:
-            lines.append("Inputs (signals feeding this node): " + ", ".join(
-                f"{self._title(p)} (id={p}, weight={self._input_weight(p, node.id)})"
-                for p in preds))
+            parts = []
+            for p in preds:
+                pn = self.store.get_node(p)
+                cur = ""
+                if pn.outbound_signal:
+                    cur = f", current={pn.outbound_signal.severity.value}/{pn.outbound_signal.score:.0f}"
+                parts.append(f"{self._title(p)} (id={p}, weight={self._input_weight(p, node.id)}{cur})")
+            lines.append("Inputs (signals feeding this node): " + ", ".join(parts))
 
         # Leaf data: real query, live readings, and deterministic rule findings.
         binding = node.data_binding
@@ -93,55 +104,46 @@ class FlattenEngine:
                 snippet = chunks[0].replace("\n", " ").strip()[:240]
                 lines.append(f"Context: {snippet}")
 
-        if node.current:
-            cur = node.current
-            lines.append(
-                f"Previous assessment: {cur.llm_verdict.final_score:.0f} "
-                f"({cur.llm_verdict.severity.value})"
-            )
+        # Deliberately NOT including this node's own previous score: the prompt is
+        # then a pure function of structure + data, so temperature-0 output is
+        # stable across re-runs when nothing changed.
         return "\n".join(lines)
 
     def flatten_full(self) -> str:
-        order = self.store.topo_order(set(self.store.all_ids()))
-        blocks = []
-        for nid in order:
-            blocks.append(self._render_node(self.store.get_node(nid)))
+        return self.flatten_scope(set(self.store.all_ids()))
+
+    def flatten_scope(self, scope) -> str:
+        """Flatten only the given nodes (topologically ordered)."""
+        order = self.store.topo_order(set(scope))
+        blocks = [self._render_node(self.store.get_node(nid)) for nid in order]
         return "\n---\n".join(blocks)
 
-    def flatten_delta(self) -> str:
-        order = self.store.topo_order(set(self.store.all_ids()))
-        blocks = []
-        for nid in order:
-            node = self.store.get_node(nid)
-            if node.delta_accumulator > 0:
-                blocks.append(self._render_node(node))
-        return "\n---\n".join(blocks) if blocks else ""
-
-    def build_batch_prompt(self, mode: str = "full") -> tuple[str, list[dict]]:
-        graph_text = self.flatten_full() if mode == "full" else self.flatten_delta()
+    def build_batch_prompt(self, mode: str = "full", scope=None) -> tuple[str, list[dict]]:
+        graph_text = self.flatten_scope(scope) if scope is not None else self.flatten_full()
         system = (
             "You are an operational risk assessor for a semiconductor fab supply "
-            "chain. You receive the ENTIRE graph flattened in topological order "
-            "(leaves first, root last): each node lists its description, the "
-            "children/dependencies that feed it with an edge weight "
-            "(critical/high/medium/low importance), any live data-source readings "
-            "and rule findings, and grounding context from policy documents.\n\n"
-            "Assess every node in one pass:\n"
+            "chain. You receive a set of nodes flattened in topological order "
+            "(inputs first). Each node lists its description, its inputs with an "
+            "edge weight (critical/high/medium/low) and each input's CURRENT "
+            "signal (severity/score), any live data-source readings and rule "
+            "findings, and grounding context from policy documents.\n\n"
+            "Score each node you are given:\n"
             "- Leaf data sources: score from their rule findings and readings.\n"
-            "- Tasks: synthesize the signals from their children and dependencies. "
-            "Weight each upstream signal by its edge importance (critical dominates, "
-            "low is weak). Multiple moderate signals can compound into higher risk.\n"
-            "- Risk flows leaf -> task -> root; use the grounding context for "
-            "domain judgment (e.g. single-source suppliers, single-owner roles).\n\n"
+            "- Tasks: synthesize the inputs' current signals. Weight each by its "
+            "edge importance (critical dominates, low is weak). Multiple moderate "
+            "signals can compound into higher risk. A single-source/single-owner "
+            "input keeps risk elevated; redundancy (several inputs, only one bad) "
+            "mitigates it.\n"
+            "- Be consistent and deterministic: identical inputs must yield the "
+            "same score. Do not invent volatility that the data does not show.\n\n"
             "For every node return an object: node_id, final_score (0-100), severity "
             "(low/medium/high/critical), rationale (ONE short clause, <= 15 words). "
-            "Be terse to keep the response small. "
-            "Reply with ONLY a compact JSON array of these objects, one per node, "
-            "no markdown, no prose outside the array."
+            "Reply with ONLY a compact JSON array of these objects, one per node "
+            "you were given, no markdown, no prose outside the array."
         )
         prompt = (
-            "Assess every node in this graph. Return a JSON array with one "
-            f"object per node.\n\n{graph_text}"
+            "Score every node below. Return a JSON array with one object per "
+            f"node.\n\n{graph_text}"
         )
         return system, [{"role": "user", "content": prompt}]
 

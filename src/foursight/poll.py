@@ -50,7 +50,10 @@ class PollService:
             node = self.store.get_node(nid)
             if not (node.data_binding and node.data_binding.query):
                 continue
-            fetched = self._read(nid, node.data_binding.query)
+            try:
+                fetched = self._read(nid, node.data_binding.query)
+            except Exception:
+                continue   # a bad/malformed query must not break the assessment
             prev = dict(node.data_binding.raw_values)
             node.data_binding.raw_values.update(fetched)
             if any(prev.get(f) != v for f, v in fetched.items()):

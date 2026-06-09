@@ -255,6 +255,7 @@ class DeepSeekLLM:
             resp = self._oai.chat.completions.create(
                 model=self.model,
                 max_tokens=4096,
+                temperature=0,   # near-deterministic: same graph -> same scores
                 messages=[{"role": "system", "content": system},
                           {"role": "user", "content": prompt}],
             )

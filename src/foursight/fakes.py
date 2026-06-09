@@ -53,6 +53,16 @@ class FakeStore:
     def all_ids(self):
         return list(self.nodes.keys())
 
+    def closure(self, scope):
+        seen = set(scope)
+        stack = list(scope)
+        while stack:
+            n = stack.pop()
+            for c in self._children.get(n, []):
+                if c not in seen:
+                    seen.add(c); stack.append(c)
+        return seen
+
     def influence_predecessors(self, nid):
         out = []
         for e in self._edges:
@@ -105,6 +115,9 @@ class FakeEngine:
         self.store._origin = change
 
     def run_full(self, trigger=None):
+        return []
+
+    def run_crawl(self, scope=None, trigger=None):
         return []
 
     def fire_node(self, nid, trigger=None):

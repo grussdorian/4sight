@@ -60,37 +60,58 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
     # Lazy initial assessment: boot stays fast (no LLM calls). Assessment runs on
     # the first request that needs it, and on data changes.
     _boot = {"assessed": False}
+    _dirty = set()   # node ids edited since the last assessment
 
     def _assess_all():
-        """Re-assess the whole graph. With a batch-capable LLM (real DeepSeek)
-        this flattens the entire graph and makes ONE call; with the deterministic
-        FakeLLM it falls back to the per-node rule pass (hermetic test suite)."""
-        poller.refresh()   # pull live SQL readings into raw_values first
+        """Re-assess only the nodes affected by a change: refresh readings, find
+        which leaves changed (plus any never-assessed nodes), and re-score that
+        influence cone. Unchanged branches keep their severity. With real DeepSeek
+        the cone is flattened into ONE call; with FakeLLM a deterministic cone
+        crawl is used (hermetic tests). Robust: a bad LLM entry or query never
+        500s -- it is skipped or falls back to the rule crawl."""
+        from .models import TriggerType
+        changed = poller.refresh()   # leaf ids whose SQL readings changed (resilient)
+        dirty = set(changed) | set(_dirty) | {nid for nid in store.all_ids()
+                                              if store.get_node(nid).current is None}
+        if not dirty:
+            _boot["assessed"] = True
+            return                   # nothing changed -> nothing re-scored
+        scope = store.closure(dirty)
+
         if getattr(getattr(eng, "llm", None), "model", "fake") == "fake":
-            eng.run_full()
+            eng.run_crawl(list(dirty), TriggerType.NODE_FIRED)
         else:
             from .flatten import FlattenEngine, assessment_from_batch
             from .reports import static_report
             flat = FlattenEngine(store, eng.vector)
-            system, messages = flat.build_batch_prompt(mode="full")
+            system, messages = flat.build_batch_prompt(scope=scope)
             try:
                 raw = eng.llm.batch_assess(system, messages[0]["content"])
                 entries = flat.parse_batch_response(raw)
             except Exception:
-                eng.run_full()       # resilience: fall back to the rule pass
+                eng.run_crawl(list(dirty), TriggerType.NODE_FIRED)   # deterministic fallback
+                _dirty.clear()
                 _boot["assessed"] = True
+                _persist()
                 return
             applied = []
             for entry in entries:
                 nid = entry.get("node_id")
-                if nid in store.nodes:
-                    node = store.get_node(nid)
-                    node.current = assessment_from_batch(node, entry)
-                    node.history.append(node.current.version)
-                    node.outbound_signal = node.current.signal
-                    applied.append(node)
+                if nid in store.nodes and nid in scope:
+                    try:
+                        node = store.get_node(nid)
+                        node.current = assessment_from_batch(node, entry)
+                        node.history.append(node.current.version)
+                        node.outbound_signal = node.current.signal
+                        applied.append(node)
+                    except Exception:
+                        continue     # skip a malformed entry rather than fail the request
             for node in applied:
-                static_report(node, store)
+                try:
+                    static_report(node, store)
+                except Exception:
+                    continue
+        _dirty.clear()
         _boot["assessed"] = True
         _persist()
 
@@ -246,8 +267,9 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
         severity = body.get("severity", "high")
         field, value = _band_value(node, severity)
         set_metric(conn, node_id, field, float(value))
-        poller.refresh([node_id])     # SQL -> raw_values (no per-node crawl)
-        _assess_all()                 # one flattened batch assessment (real LLM)
+        node.data_binding.raw_values[field] = float(value)
+        _dirty.add(node_id)
+        _assess_all()                 # re-scores this node's cone
         return {"node_id": node_id, "field": field, "value": value,
                 "severity": severity, "changed": store.all_ids()}
 
@@ -274,6 +296,7 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
                 continue
             set_metric(conn, node_id, field, float(value))
             node.data_binding.raw_values[field] = float(value)
+        _dirty.add(node_id)   # re-score this node's cone on the next assessment
         _persist()
         return {"node_id": node_id, "raw_values": node.data_binding.raw_values}
 

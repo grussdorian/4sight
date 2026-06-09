@@ -24,14 +24,12 @@ def test_flatten_full_includes_all_nodes():
     assert "Inputs" in prompt or "feeding" in prompt.lower()
 
 
-def test_flatten_delta_only_changed():
+def test_flatten_scope_only_includes_scope_nodes():
     store = _build_diamond()
-    store.get_node("leaf").delta_accumulator = 60.0
-    store.get_node("root").delta_accumulator = 10.0
     eng = FlattenEngine(store)
-    prompt = eng.flatten_delta()
+    prompt = eng.flatten_scope({"leaf", "root"})
     assert "leaf" in prompt
-    assert "id=a)" not in prompt
+    assert "id=a)" not in prompt      # node a is not in scope (only referenced as an input)
     assert "id=root)" in prompt
 
 
