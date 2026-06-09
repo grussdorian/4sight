@@ -346,8 +346,10 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
 
     @app.get("/root")
     def get_root():
+        # The root is the top of the influence graph: signals flow into it but
+        # it flows nowhere downstream (no influence successors).
         for nid in store.all_ids():
-            if not store.parents(nid):
+            if not store.influence_successors(nid):
                 return {"node_id": nid}
         return {"node_id": store.all_ids()[0] if store.all_ids() else ""}
 

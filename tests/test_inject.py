@@ -80,3 +80,8 @@ def test_persistence_survives_restart(tmp_path):
     # structure restored too
     fab = c2.get("/builder/nodes/fab17_output").json()
     assert set(fab["inputs"]) >= {"eng_ops", "supply_chain", "workforce"}
+
+
+def test_root_endpoint_returns_true_root():
+    c = _client()
+    assert c.get("/root").json()["node_id"] == "fab17_output"
