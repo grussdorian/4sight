@@ -55,14 +55,45 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
     triggers = TriggerEngine(store)
     poller = PollService(store, conn, eng, triggers)
 
-    # Lazy initial assessment: boot stays fast (no LLM calls). The full pass runs
-    # once, on the first request that needs assessment state.
+    # Lazy initial assessment: boot stays fast (no LLM calls). Assessment runs on
+    # the first request that needs it, and on data changes.
     _boot = {"assessed": False}
+
+    def _assess_all():
+        """Re-assess the whole graph. With a batch-capable LLM (real DeepSeek)
+        this flattens the entire graph and makes ONE call; with the deterministic
+        FakeLLM it falls back to the per-node rule pass (hermetic test suite)."""
+        if getattr(getattr(eng, "llm", None), "model", "fake") == "fake":
+            eng.run_full()
+        else:
+            from .flatten import FlattenEngine, assessment_from_batch
+            from .reports import static_report
+            flat = FlattenEngine(store, eng.vector)
+            system, messages = flat.build_batch_prompt(mode="full")
+            try:
+                raw = eng.llm.batch_assess(system, messages[0]["content"])
+                entries = flat.parse_batch_response(raw)
+            except Exception:
+                eng.run_full()       # resilience: fall back to the rule pass
+                _boot["assessed"] = True
+                return
+            applied = []
+            for entry in entries:
+                nid = entry.get("node_id")
+                if nid in store.nodes:
+                    node = store.get_node(nid)
+                    node.current = assessment_from_batch(node, entry)
+                    node.history.append(node.current.version)
+                    node.outbound_signal = node.current.signal
+                    applied.append(node)
+            for node in applied:
+                static_report(node, store)
+        _boot["assessed"] = True
+        _persist()
 
     def _ensure_assessed():
         if not _boot["assessed"]:
-            _boot["assessed"] = True
-            eng.run_full()
+            _assess_all()
 
     def _persist():
         if persist:
@@ -200,30 +231,29 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
     @app.post("/inject/{node_id}")
     def inject(node_id: str, body: dict):
         """Inject a problem at a given severity. Writes a value into the leaf's
-        real SQL metric so the next poll drives it into that severity band, then
-        polls + re-assesses the influence cone immediately. severity=low resets."""
+        real SQL metric so the refresh drives it into that severity band, then
+        re-assesses the whole graph in one flattened batch call. severity=low
+        resets to the healthy baseline."""
         if node_id not in store.nodes:
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=404, content={"error": "node not found"})
         node = store.get_node(node_id)
         if not node.data_binding:
             return {"error": "not a leaf node"}
-        _ensure_assessed()  # establish baseline before injecting on top of it
         severity = body.get("severity", "high")
         field, value = _band_value(node, severity)
         set_metric(conn, node_id, field, float(value))
-        changed = poller.poll([node_id])
-        _persist()
+        poller.refresh([node_id])     # SQL -> raw_values (no per-node crawl)
+        _assess_all()                 # one flattened batch assessment (real LLM)
         return {"node_id": node_id, "field": field, "value": value,
-                "severity": severity, "changed": changed}
+                "severity": severity, "changed": store.all_ids()}
 
     @app.post("/poll")
     def poll_sources(body: dict):
-        _ensure_assessed()
         node_ids = body.get("node_ids")
-        changed = poller.poll(node_ids)
-        _persist()
-        return {"changed": changed}
+        poller.refresh(node_ids)
+        _assess_all()
+        return {"changed": store.all_ids()}
 
     @app.get("/node/{node_id}/context")
     def node_context(node_id: str):

@@ -30,6 +30,23 @@ class PollService:
                 out.append(nid)
         return out
 
+    def refresh(self, node_ids: list[str] | None = None) -> list[str]:
+        """Fetch each leaf's SQL data into its raw_values WITHOUT assessing.
+        Returns the ids whose readings changed. Used by the batch-assessment
+        path, where a single flattened LLM call does the scoring afterward."""
+        targets = node_ids if node_ids is not None else self._leaf_ids()
+        changed = []
+        for nid in targets:
+            node = self.store.get_node(nid)
+            if not (node.data_binding and node.data_binding.query):
+                continue
+            fetched = SqlSourceAdapter(self.conn, nid, node.data_binding.query).fetch()
+            prev = dict(node.data_binding.raw_values)
+            node.data_binding.raw_values.update(fetched)
+            if any(prev.get(f) != v for f, v in fetched.items()):
+                changed.append(nid)
+        return changed
+
     def poll(self, node_ids: list[str] | None = None) -> list[str]:
         targets = node_ids if node_ids is not None else self._leaf_ids()
         for nid in targets:

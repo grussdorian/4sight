@@ -241,11 +241,19 @@ class DeepSeekLLM:
         return self._extract_text(resp).strip()
 
     def batch_assess(self, system: str, prompt: str) -> str:
-        resp = self._client.messages.create(
-            model=self.model,
-            max_tokens=4096,
-            thinking={"type": "enabled", "budget_tokens": 4096},
-            system=system,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        return self._extract_text(resp)
+        # One call scores the whole graph. A small thinking budget keeps the
+        # response reliable (without it the endpoint intermittently returns an
+        # empty completion) while staying far faster than a large budget. Retry
+        # a couple of times if the model still returns empty text.
+        for _ in range(3):
+            resp = self._client.messages.create(
+                model=self.model,
+                max_tokens=4096,
+                thinking={"type": "enabled", "budget_tokens": 1536},
+                system=system,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = self._extract_text(resp).strip()
+            if text:
+                return text
+        return ""
