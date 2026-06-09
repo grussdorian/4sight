@@ -31,7 +31,7 @@ def _leaf(s, nid, title, sens=Sensitivity.INTERNAL):
                     ), raw={}))
 
 
-def build_seed(llm=None, vector=None, conn=None):
+def build_seed(llm=None, vector=None, conn=None, assess=True):
     from .llm import FakeLLM
     from .vector_store import FakeVector
     s = GraphStore()
@@ -49,11 +49,12 @@ def build_seed(llm=None, vector=None, conn=None):
         s.add_edge(a, b, EdgeType.DECOMPOSITION)
     s.add_edge("alice_owner", "payments_team", EdgeType.DEPENDENCY)   # cross-branch sideways
     eng = Engine(s, llm or FakeLLM(), vector or FakeVector(), generate_report)
-    eng.run_full()
+    if assess:
+        eng.run_full()
     return s, eng, {}
 
 
-def load_company(path=None, llm=None, vector=None, conn=None):
+def load_company(path=None, llm=None, vector=None, conn=None, assess=True):
     from .company_fixture import parse_company, FIXTURES
     from .vector_store import FakeVector
     from .llm import FakeLLM
@@ -67,11 +68,12 @@ def load_company(path=None, llm=None, vector=None, conn=None):
     for doc_id, text in spec.policy_docs:
         vector.add(doc_id, text)
     eng = Engine(s, llm or FakeLLM(), vector, generate_report)
-    eng.run_full()
+    if assess:
+        eng.run_full()
     return s, eng, {}
 
 
-def load_supply_chain(path=None, llm=None, vector=None, conn=None):
+def load_supply_chain(path=None, llm=None, vector=None, conn=None, assess=True):
     from .supply_chain_fixture import parse_supply_chain, metric_baselines, FIXTURES
     from .vector_store import FakeVector
     from .llm import FakeLLM
@@ -94,5 +96,6 @@ def load_supply_chain(path=None, llm=None, vector=None, conn=None):
             if node.data_binding:
                 node.data_binding.raw_values.update(read_metrics(conn, nid))
     eng = Engine(s, llm or FakeLLM(), vector, generate_report)
-    eng.run_full()
+    if assess:
+        eng.run_full()
     return s, eng, {}

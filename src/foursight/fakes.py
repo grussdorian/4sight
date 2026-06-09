@@ -117,7 +117,7 @@ class FakeEngine:
         return changed
 
 
-def fake_seed(llm=None, vector=None, conn=None):
+def fake_seed(llm=None, vector=None, conn=None, assess=True):
     store = FakeStore()
     return store, FakeEngine(store), {}
 

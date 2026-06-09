@@ -47,14 +47,22 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
             if node.data_binding:
                 node.data_binding.raw_values.update(read_metrics(conn, nid))
         eng = Engine(store, _llm, _vector, generate_report)
-        eng.run_full()
     else:
-        store, eng, _ = seed_fn(llm=llm, vector=vector, conn=conn)
+        store, eng, _ = seed_fn(llm=llm, vector=vector, conn=conn, assess=False)
         if persist:
             save_graph(store, conn)
 
     triggers = TriggerEngine(store)
     poller = PollService(store, conn, eng, triggers)
+
+    # Lazy initial assessment: boot stays fast (no LLM calls). The full pass runs
+    # once, on the first request that needs assessment state.
+    _boot = {"assessed": False}
+
+    def _ensure_assessed():
+        if not _boot["assessed"]:
+            _boot["assessed"] = True
+            eng.run_full()
 
     def _persist():
         if persist:
@@ -170,6 +178,7 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
         for entry in assessments:
             node = store.get_node(entry["node_id"])
             eng.report_fn(node, store, llm)
+        _boot["assessed"] = True  # batch-assess is itself a full assessment pass
         _persist()
         return {"assessments": assessments, "violations": violations}
 
@@ -199,6 +208,7 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
         node = store.get_node(node_id)
         if not node.data_binding:
             return {"error": "not a leaf node"}
+        _ensure_assessed()  # establish baseline before injecting on top of it
         severity = body.get("severity", "high")
         field, value = _band_value(node, severity)
         set_metric(conn, node_id, field, float(value))
@@ -209,6 +219,7 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
 
     @app.post("/poll")
     def poll_sources(body: dict):
+        _ensure_assessed()
         node_ids = body.get("node_ids")
         changed = poller.poll(node_ids)
         _persist()
@@ -236,6 +247,7 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
 
     @app.get("/graph-raw")
     def graph_raw(role: str = "reviewer"):
+        _ensure_assessed()
         viewer = Viewer(id="anon", role=Role(role))
         nodes = []
         for nid in store.all_ids():
@@ -278,6 +290,7 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
 
     @app.get("/graph-data")
     def graph_data(role: str = "reviewer"):
+        _ensure_assessed()
         viewer = Viewer(id="anon", role=Role(role))
         nodes = {}
         for nid in store.all_ids():
@@ -297,6 +310,7 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
 
     @app.get("/report/{node_id}")
     def report(node_id: str, role: str = "reviewer"):
+        _ensure_assessed()
         rep = get_report_fn(node_id, store, Viewer(id="anon", role=Role(role)))
         return rep.model_dump(mode="json") if rep else None
 
@@ -309,11 +323,13 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
 
     @app.get("/trace/{node_id}")
     def trace(node_id: str):
+        _ensure_assessed()
         t = trace_fn(node_id, store)
         return {"path": t["path"], "origin": t["origin"].model_dump(mode="json") if t["origin"] else None}
 
     @app.post("/simulate-change")
     def simulate(body: dict):
+        _ensure_assessed()
         now = datetime.now(timezone.utc)
         kind = body.get("kind", "leave")
         source = body.get("source", "Leave Calendar")
@@ -357,6 +373,7 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
         if node_id not in store.nodes:
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=404, content={"error": "not found"})
+        _ensure_assessed()
         node = store.get_node(node_id)
         return {
             "id": node.id, "kind": node.kind.value, "title": node.title,
@@ -456,6 +473,7 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
 
     @app.get("/builder/graph")
     def get_builder_graph():
+        _ensure_assessed()
         nodes = []
         for nid in store.all_ids():
             n = store.get_node(nid)
