@@ -2,7 +2,7 @@ from __future__ import annotations
 import hashlib
 import json
 import networkx as nx
-from .models import Node, Edge, EdgeType
+from .models import Node, Edge, EdgeType, Severity
 
 
 def content_hash(binding) -> str:
@@ -28,8 +28,10 @@ class GraphStore:
             return (edge.dst, edge.src)
         return (edge.src, edge.dst)
 
-    def add_edge(self, src: str, dst: str, type: EdgeType) -> None:
+    def add_edge(self, src: str, dst: str, type: EdgeType, weight: Severity | None = None) -> None:
         edge = Edge(src=src, dst=dst, type=type)
+        if weight is not None:
+            edge.weight = weight
         u, v = self._influence_edge(edge)
         if u == v or nx.has_path(self._infl, v, u):
             raise ValueError(f"edge {src}->{dst} ({type.value}) would create a cycle")
@@ -78,7 +80,17 @@ class GraphStore:
         return None
 
     def snapshot(self, path: str) -> None:
-        data = {"nodes": [n.model_dump(mode="json") for n in self.nodes.values()],
-                "edges": [e.model_dump(mode="json") for e in self._edges]}
+        nodes_data = []
+        for n in self.nodes.values():
+            nd = n.model_dump(mode="json")
+            # Remove runtime signal caches from snapshot
+            nd["inbound_signals"] = []
+            nd["outbound_signal"] = None
+            nodes_data.append(nd)
+        data = {
+            "nodes": nodes_data,
+            "edges": [{"src": e.src, "dst": e.dst, "type": e.type.value, "weight": e.weight.value}
+                      for e in self._edges],
+        }
         with open(path, "w") as f:
             json.dump(data, f, indent=2, default=str)
