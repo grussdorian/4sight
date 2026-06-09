@@ -70,45 +70,35 @@ def redact_cause(signal: Signal) -> str:
     return signal.cause
 
 
+def _input_weight(store: GraphStore, pred: str, node_id: str) -> str:
+    """Edge weight between an input and a node, regardless of edge orientation."""
+    e = next((e for e in store._edges if {e.src, e.dst} == {pred, node_id}), None)
+    return e.weight.value if e else "medium"
+
+
 def _collect_contributions(node: Node, store: GraphStore) -> list[dict]:
-    """Gather upstream signals with their edge weight and (redacted) cause.
-
-    Decomposition children are reached via edges (node -> child); dependency
-    sources via edges (source -> node). The weight is looked up on the matching
-    edge in each direction.
-    """
+    """Gather the signals of this node's INPUTS (influence predecessors) with
+    their edge weight and (redacted) cause. Using the influence graph keeps this
+    correct no matter how the edges are oriented (leaf->root or root->leaf)."""
     contributions: list[dict] = []
-
-    for cid in store.children(node.id):
-        child = store.get_node(cid)
-        sig = child.outbound_signal
+    for pid in store.influence_predecessors(node.id):
+        up = store.get_node(pid)
+        sig = up.outbound_signal
         if not sig:
             continue
-        edge = next((e for e in store._edges if e.src == node.id and e.dst == cid), None)
         contributions.append({
-            "title": child.title, "score": sig.score, "severity": sig.severity.value,
-            "weight": edge.weight.value if edge else "medium", "cause": redact_cause(sig),
+            "title": up.title, "score": sig.score, "severity": sig.severity.value,
+            "weight": _input_weight(store, pid, node.id), "cause": redact_cause(sig),
         })
-
-    for did in store.dependencies(node.id):
-        dep = store.get_node(did)
-        sig = dep.outbound_signal
-        if not sig:
-            continue
-        edge = next((e for e in store._edges if e.src == did and e.dst == node.id), None)
-        contributions.append({
-            "title": dep.title, "score": sig.score, "severity": sig.severity.value,
-            "weight": edge.weight.value if edge else "medium", "cause": redact_cause(sig),
-        })
-
     return contributions
 
 
 def assess(node: Node, store: GraphStore, llm, vector, triggered_by: dict) -> Assessment:
-    child_ids = store.children(node.id)
-    dep_ids = store.dependencies(node.id)
-    children = [store.get_node(c).current for c in child_ids if store.get_node(c).current]
-    deps = [store.get_node(d).current for d in dep_ids if store.get_node(d).current]
+    # Inputs are the influence predecessors (orientation-independent).
+    pred_ids = store.influence_predecessors(node.id)
+    children = [store.get_node(p).current for p in pred_ids if store.get_node(p).current]
+    deps: list = []
+    child_ids, dep_ids = pred_ids, []
 
     rule = score_node(node, children, deps)
 
@@ -206,15 +196,11 @@ def assess(node: Node, store: GraphStore, llm, vector, triggered_by: dict) -> As
     node.current = a
     node.history.append(version)
     node.outbound_signal = signal
-    # Cache inbound signals for UI display
-    node.inbound_signals = []
-    for cid in child_ids:
-        child = store.get_node(cid)
-        if child.outbound_signal:
-            node.inbound_signals.append(child.outbound_signal)
-    for did in dep_ids:
-        dep = store.get_node(did)
-        if dep.outbound_signal:
-            node.inbound_signals.append(dep.outbound_signal)
+    # Cache inbound signals (this node's inputs) for UI display.
+    node.inbound_signals = [
+        store.get_node(pid).outbound_signal
+        for pid in pred_ids
+        if store.get_node(pid).outbound_signal
+    ]
 
     return a

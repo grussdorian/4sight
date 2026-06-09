@@ -85,3 +85,23 @@ def test_persistence_survives_restart(tmp_path):
 def test_root_endpoint_returns_true_root():
     c = _client()
     assert c.get("/root").json()["node_id"] == "fab17_output"
+
+
+def test_inbound_signals_are_inputs_not_consumers():
+    c = _client()
+    c.get("/builder/graph")  # trigger assessment
+    wf = c.get("/builder/nodes/workforce").json()
+    inbound_src = {s["source_node"] for s in wf["inbound_signals"]}
+    # workforce is fed by bob_taylor + maint_crew; fab17_output CONSUMES it.
+    assert inbound_src == {"bob_taylor", "maint_crew"}, inbound_src
+    assert "fab17_output" not in inbound_src
+    assert "fab17_output" in wf["consumers"]
+
+
+def test_logistics_inbound_excludes_consumers():
+    c = _client()
+    c.get("/builder/graph")
+    log = c.get("/builder/nodes/logistics").json()
+    inbound_src = {s["source_node"] for s in log["inbound_signals"]}
+    assert inbound_src <= {"taipei_freight", "singapore_freight", "bunker_fuel"}, inbound_src
+    assert "supply_chain" not in inbound_src and "eng_ops" not in inbound_src

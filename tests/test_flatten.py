@@ -20,7 +20,8 @@ def test_flatten_full_includes_all_nodes():
     prompt = eng.flatten_full()
     for nid in ["root", "a", "b", "leaf"]:
         assert nid in prompt
-    assert "Decomposition" in prompt or "children" in prompt.lower()
+    # structure is rendered by influence direction (inputs feeding each node)
+    assert "Inputs" in prompt or "feeding" in prompt.lower()
 
 
 def test_flatten_delta_only_changed():

@@ -40,8 +40,11 @@ class FlattenEngine:
         self.store = store
         self.vector = vector
 
-    def _edge_weight(self, src: str, dst: str) -> str:
-        e = next((e for e in self.store._edges if e.src == src and e.dst == dst), None)
+    def _input_weight(self, pred: str, node_id: str) -> str:
+        # The stored edge between an input and a node may be in either
+        # orientation (dependency src->dst, or decomposition parent->child).
+        e = next((e for e in self.store._edges
+                  if {e.src, e.dst} == {pred, node_id}), None)
         return e.weight.value if e else "medium"
 
     def _title(self, nid: str) -> str:
@@ -55,17 +58,13 @@ class FlattenEngine:
             f"Node: {node.title} (kind={node.kind.value}, id={node.id})",
             f"Description: {node.description or 'none'}",
         ]
-        # Structure: what feeds this node, with edge importance.
-        children = self.store.children(node.id)
-        if children:
-            lines.append("Decomposition children: " + ", ".join(
-                f"{self._title(c)} (id={c}, weight={self._edge_weight(node.id, c)})"
-                for c in children))
-        deps = self.store.dependencies(node.id)
-        if deps:
-            lines.append("Dependencies: " + ", ".join(
-                f"{self._title(d)} (id={d}, weight={self._edge_weight(d, node.id)})"
-                for d in deps))
+        # Structure by influence direction: inputs feed this node; it feeds its
+        # consumers. (Edge orientation varies, so we use the influence graph.)
+        preds = self.store.influence_predecessors(node.id)
+        if preds:
+            lines.append("Inputs (signals feeding this node): " + ", ".join(
+                f"{self._title(p)} (id={p}, weight={self._input_weight(p, node.id)})"
+                for p in preds))
 
         # Leaf data: real query, live readings, and deterministic rule findings.
         binding = node.data_binding

@@ -89,8 +89,9 @@ def load_supply_chain(path=None, llm=None, vector=None, conn=None, assess=True):
     if conn is not None:
         # Seed the operational data tables and load each leaf's raw values from
         # SQL so the initial assessment reflects real (healthy) polled data.
-        from .db import seed_metrics, read_metrics
+        from .db import seed_metrics, read_metrics, seed_ferry_prices
         seed_metrics(conn, metric_baselines())
+        seed_ferry_prices(conn)   # demo source for a live-added Ferry price node
         for nid in s.all_ids():
             node = s.get_node(nid)
             if node.data_binding:

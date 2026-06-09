@@ -36,12 +36,14 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
         from .vector_store import FakeVector
         from .llm import FakeLLM
         from .supply_chain_fixture import metric_baselines, parse_supply_chain
+        from .db import seed_ferry_prices
         store = load_graph(conn)
         _llm = llm or FakeLLM()
         _vector = vector or FakeVector()
         for doc_id, text in parse_supply_chain().policy_docs:
             _vector.add(doc_id, text)
         seed_metrics(conn, metric_baselines())
+        seed_ferry_prices(conn)
         for nid in store.all_ids():
             node = store.get_node(nid)
             if node.data_binding:
@@ -63,6 +65,7 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
         """Re-assess the whole graph. With a batch-capable LLM (real DeepSeek)
         this flattens the entire graph and makes ONE call; with the deterministic
         FakeLLM it falls back to the per-node rule pass (hermetic test suite)."""
+        poller.refresh()   # pull live SQL readings into raw_values first
         if getattr(getattr(eng, "llm", None), "model", "fake") == "fake":
             eng.run_full()
         else:
@@ -426,7 +429,13 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
             "query": node.data_binding.query if node.data_binding else "",
             "field_rules": [fr.model_dump(mode="json") for fr in (node.data_binding.field_rules if node.data_binding else [])],
             "raw_values": node.data_binding.raw_values if node.data_binding else {},
-            "inbound_signals": [s.model_dump(mode="json") for s in node.inbound_signals],
+            # Inbound = the signals of this node's INPUTS (influence predecessors),
+            # computed live so it is correct regardless of assessment path/order.
+            "inbound_signals": [
+                store.get_node(pid).outbound_signal.model_dump(mode="json")
+                for pid in store.influence_predecessors(node_id)
+                if store.get_node(pid).outbound_signal
+            ],
             "outbound_signal": node.outbound_signal.model_dump(mode="json") if node.outbound_signal else None,
         }
 

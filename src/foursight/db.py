@@ -32,7 +32,20 @@ def init_db(conn: sqlite3.Connection) -> None:
             value REAL, updated_at TEXT,
             PRIMARY KEY (node_id, field)
         );
+        CREATE TABLE IF NOT EXISTS ferry_prices (
+            route TEXT PRIMARY KEY, price REAL, updated_at TEXT
+        );
     """)
+    conn.commit()
+
+
+def seed_ferry_prices(conn: sqlite3.Connection) -> None:
+    """Demo data source for a live-added 'Ferry price' dependency. Seeded with a
+    spike (baseline ~28) so adding the node surfaces a Taipei Freight risk."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute("INSERT OR IGNORE INTO ferry_prices(route, price, updated_at) "
+                 "VALUES('taipei', 75.0, ?)", (now,))
     conn.commit()
 
 

@@ -78,3 +78,16 @@ def test_parse_batch_response_robustness():
     trunc = '[{"node_id":"d","final_score":4},{"node_id":"e","final_score":5},{"node_id":"f"'
     salvaged = flat.parse_batch_response(trunc)
     assert [o["node_id"] for o in salvaged] == ["d", "e"]
+
+
+def test_inbound_signals_computed_from_influence_after_batch():
+    # After a batch assessment (which sets every node's outbound signal), the
+    # panel's inbound list must be the node's INPUTS, derived from the influence
+    # graph -- not an empty/stale cache and not its consumers.
+    spy = SpyLLM()
+    c = TestClient(build_app(seed_fn=load_supply_chain, llm=spy))
+    c.get("/builder/graph")  # one batch assessment
+    log = c.get("/builder/nodes/logistics").json()
+    inbound_src = {s["source_node"] for s in log["inbound_signals"]}
+    assert inbound_src == {"taipei_freight", "singapore_freight", "bunker_fuel"}, inbound_src
+    assert "supply_chain" not in inbound_src and "eng_ops" not in inbound_src

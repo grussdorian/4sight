@@ -8,6 +8,7 @@ var portDrag=null, portLine=null;
 var creatingKind=null;
 var pendingEdge=null;
 var pendingEdgeWeight="medium";
+var panning=null;
 var NODE_W=150, NODE_H=52, PORT_R=6;
 
 var COLORS={critical:"#dc2626",high:"#ea580c",medium:"#ca8a04",low:"#16a34a",none:"#9ca3af",
@@ -22,7 +23,9 @@ function init(){
   svgEl.addEventListener("mousemove",onMouseMove);
   svgEl.addEventListener("mouseup",onMouseUp);
   svgEl.addEventListener("contextmenu",onContextMenu);
+  window.addEventListener("mouseup",function(){if(panning){panning=null;svgEl.classList.remove("panning");}});
   window.addEventListener("resize",resizeSVG);
+  initPanelResize();
   resizeSVG();
   loadGraph();
 }
@@ -38,6 +41,21 @@ function updateViewBox(){
   svgEl.style.width="100%"; svgEl.style.height="100%"; svgEl.style.display="block";
 }
 
+function initPanelResize(){
+  var resizer=document.getElementById("panel-resizer");
+  var panel=document.getElementById("node-panel");
+  if(!resizer||!panel) return;
+  var active=false;
+  resizer.addEventListener("mousedown",function(e){active=true;e.preventDefault();document.body.style.cursor="col-resize";});
+  window.addEventListener("mousemove",function(e){
+    if(!active) return;
+    var w=Math.max(240,Math.min(760,window.innerWidth-e.clientX));
+    panel.style.width=w+"px";
+    resizeSVG();
+  });
+  window.addEventListener("mouseup",function(){if(active){active=false;document.body.style.cursor="";}});
+}
+
 function toSVG(mx,my){
   var pt=svgEl.createSVGPoint(); pt.x=mx; pt.y=my;
   var ctm=svgEl.getScreenCTM();
@@ -48,16 +66,15 @@ function toSVG(mx,my){
 
 function onWheel(e){
   e.preventDefault();
-  if(e.ctrlKey||e.metaKey){
-    var p=toSVG(e.clientX,e.clientY); if(!p) return;
-    var ds=e.deltaY>0?0.9:1.1;
-    var newScale=Math.max(0.3,Math.min(3,viewScale*ds));
-    var cx=viewX+viewW/2, cy=viewY+viewH/2;
-    viewW=viewW*viewScale/newScale; viewH=viewH*viewScale/newScale;
-    viewScale=newScale;
-    viewX=cx-viewW/2; viewY=cy-viewH/2;
-    updateViewBox();
-  }
+  var p=toSVG(e.clientX,e.clientY); if(!p) return;
+  var ds=e.deltaY>0?0.9:1.1;
+  var newScale=Math.max(0.3,Math.min(3,viewScale*ds));
+  if(newScale===viewScale) return;
+  var k=viewScale/newScale;            // keep the point under the cursor fixed
+  viewW=viewW*k; viewH=viewH*k;
+  viewX=p.x-(p.x-viewX)*k; viewY=p.y-(p.y-viewY)*k;
+  viewScale=newScale;
+  updateViewBox();
 }
 
 async function loadGraph(){
@@ -142,10 +159,20 @@ function onMouseDown(e){
     dragOffX=p.x-np.x; dragOffY=p.y-np.y;
     selectNode(nid); svgEl.classList.add("dragging"); return;
   }
+  // Empty canvas: start panning (drag the view both axes).
   selectNode(null);
+  panning={sx:e.clientX, sy:e.clientY, vx:viewX, vy:viewY};
+  svgEl.classList.add("panning");
 }
 
 function onMouseMove(e){
+  if(panning){
+    var rect=svgEl.getBoundingClientRect();
+    viewX=panning.vx-(e.clientX-panning.sx)*(viewW/rect.width);
+    viewY=panning.vy-(e.clientY-panning.sy)*(viewH/rect.height);
+    updateViewBox();
+    return;
+  }
   var p=toSVG(e.clientX,e.clientY); if(!p) return;
   if(draggingNode){
     nodePositions[draggingNode]={x:p.x-dragOffX,y:p.y-dragOffY}; render();
@@ -160,6 +187,7 @@ function onMouseMove(e){
 }
 
 function onMouseUp(e){
+  if(panning){panning=null;svgEl.classList.remove("panning");}
   if(draggingNode){draggingNode=null;svgEl.classList.remove("dragging");}
   if(portDrag){
     var snap=findSnapNode(e.clientX,e.clientY);
