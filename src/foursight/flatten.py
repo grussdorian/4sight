@@ -58,6 +58,22 @@ class FlattenEngine:
         except Exception:
             return nid
 
+    def _input_current(self, pred) -> str:
+        """The input's current signal for the prompt. For a leaf we use its FRESH
+        rule-based score (so a brand-new or just-changed leaf is visible to its
+        consumer even before it has an outbound_signal); otherwise the cached
+        outbound signal."""
+        from .models import NodeKind, severity_from_score
+        if pred.kind == NodeKind.LEAF and pred.data_binding:
+            from .rules import score_leaf
+            rs = score_leaf(pred).score
+            sig = pred.outbound_signal.score if pred.outbound_signal else 0.0
+            score = max(rs, sig)
+            return f", current={severity_from_score(score).value}/{score:.0f}"
+        if pred.outbound_signal:
+            return f", current={pred.outbound_signal.severity.value}/{pred.outbound_signal.score:.0f}"
+        return ""
+
     def _render_node(self, node: Node) -> str:
         lines = [
             f"Node: {node.title} (kind={node.kind.value}, id={node.id})",
@@ -71,10 +87,8 @@ class FlattenEngine:
             parts = []
             for p in preds:
                 pn = self.store.get_node(p)
-                cur = ""
-                if pn.outbound_signal:
-                    cur = f", current={pn.outbound_signal.severity.value}/{pn.outbound_signal.score:.0f}"
-                parts.append(f"{self._title(p)} (id={p}, weight={self._input_weight(p, node.id)}{cur})")
+                parts.append(f"{self._title(p)} (id={p}, weight={self._input_weight(p, node.id)}"
+                             f"{self._input_current(pn)})")
             lines.append("Inputs (signals feeding this node): " + ", ".join(parts))
 
         # Leaf data: real query, live readings, and deterministic rule findings.

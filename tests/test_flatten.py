@@ -49,3 +49,17 @@ def test_parse_batch_response():
     assert len(result) == 1
     assert result[0]["node_id"] == "root"
     assert result[0]["final_score"] == 85
+
+
+def test_leaf_input_shows_fresh_rule_score():
+    from foursight.models import Node, NodeKind, EdgeType, DataBinding, FieldRule, Severity
+    s = GraphStore()
+    s.add_node(Node(id="task", kind=NodeKind.TASK, title="Task"))
+    s.add_node(Node(id="leaf", kind=NodeKind.LEAF, title="Leaf",
+                    data_binding=DataBinding(adapter_id="leaf", raw_values={"x": 90.0},
+                        field_rules=[FieldRule(field="x", operator=">", expected=80.0,
+                                               severity_on_breach=Severity.CRITICAL)])))
+    s.add_edge("leaf", "task", EdgeType.DEPENDENCY, Severity.CRITICAL)
+    prompt = FlattenEngine(s).flatten_scope({"leaf", "task"})
+    # a brand-new leaf (no outbound_signal) still shows its fresh rule score to the task
+    assert "current=critical/88" in prompt
