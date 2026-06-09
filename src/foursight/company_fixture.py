@@ -2,14 +2,14 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from .models import Node, NodeKind, EdgeType, DataBinding, Sensitivity
+from .models import Node, NodeKind, EdgeType, DataBinding, Sensitivity, FieldRule, Severity
 
 FIXTURES = Path(__file__).parent / "fixtures" / "mock_company"
 
 @dataclass
 class CompanySpec:
     nodes: list[Node]
-    edges: list[tuple[str, str, EdgeType]]
+    edges: list[tuple[str, str, EdgeType, Severity]]  # added weight
     policy_docs: list[tuple[str, str]] = field(default_factory=list)
 
 def parse_company(path: str | Path = FIXTURES) -> CompanySpec:
@@ -20,11 +20,36 @@ def parse_company(path: str | Path = FIXTURES) -> CompanySpec:
         kind = NodeKind(n["kind"])
         binding = None
         if kind == NodeKind.LEAF:
-            binding = DataBinding(adapter_id=n["id"],
-                                  sensitivity=Sensitivity(n.get("sensitivity", "internal")))
+            field_rules = []
+            raw_frs = n.get("field_rules", [])
+            if raw_frs:
+                field_rules = [
+                    FieldRule(
+                        field=fr["field"],
+                        kind=fr.get("kind", "structured"),
+                        operator=fr.get("operator", "<"),
+                        expected=float(fr.get("expected", 0)),
+                        severity_on_breach=Severity(fr.get("severity_on_breach", "medium")),
+                    )
+                    for fr in raw_frs
+                ]
+            binding = DataBinding(
+                adapter_id=n["id"],
+                sensitivity=Sensitivity(n.get("sensitivity", "internal")),
+                field_rules=field_rules,
+            )
         nodes.append(Node(id=n["id"], kind=kind, title=n["title"],
                           data_binding=binding, raw={} if kind == NodeKind.LEAF else None))
-    edges = [(e["src"], e["dst"], EdgeType(e["type"])) for e in data["edges"]]
+
+    edges = []
+    for e in data["edges"]:
+        weight_str = e.get("weight", "medium")
+        try:
+            weight = Severity(weight_str)
+        except ValueError:
+            weight = Severity.MEDIUM
+        edges.append((e["src"], e["dst"], EdgeType(e["type"]), weight))
+
     docs = []
     pol = path / "policies"
     if pol.exists():

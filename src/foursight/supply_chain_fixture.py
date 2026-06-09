@@ -2,7 +2,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from .models import Node, NodeKind, EdgeType, DataBinding, Sensitivity
+from .models import Node, NodeKind, EdgeType, DataBinding, Sensitivity, Severity
 
 FIXTURES = Path(__file__).parent / "fixtures" / "supply_chain"
 
@@ -10,7 +10,7 @@ FIXTURES = Path(__file__).parent / "fixtures" / "supply_chain"
 @dataclass
 class SupplyChainSpec:
     nodes: list[Node]
-    edges: list[tuple[str, str, EdgeType]]
+    edges: list[tuple[str, str, EdgeType, Severity]]  # added weight
     policy_docs: list[tuple[str, str]] = field(default_factory=list)
 
 
@@ -26,7 +26,14 @@ def parse_supply_chain(path: str | Path = FIXTURES) -> SupplyChainSpec:
                                   sensitivity=Sensitivity(n.get("sensitivity", "internal")))
         nodes.append(Node(id=n["id"], kind=kind, title=n["title"],
                           data_binding=binding, raw={} if kind == NodeKind.LEAF else None))
-    edges = [(e["src"], e["dst"], EdgeType(e.get("type", "dependency"))) for e in data["edges"]]
+    edges = []
+    for e in data["edges"]:
+        weight_str = e.get("weight", "medium")
+        try:
+            weight = Severity(weight_str)
+        except ValueError:
+            weight = Severity.MEDIUM
+        edges.append((e["src"], e["dst"], EdgeType(e.get("type", "dependency")), weight))
     docs = []
     pol = path / "policies"
     if pol.exists():

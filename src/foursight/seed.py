@@ -44,8 +44,8 @@ def load_company(path=None, llm=None, vector=None):
     s = GraphStore()
     for node in spec.nodes:
         s.add_node(node)
-    for src, dst, etype in spec.edges:
-        s.add_edge(src, dst, etype)
+    for src, dst, etype, weight in spec.edges:
+        s.add_edge(src, dst, etype, weight)
     vector = vector or FakeVector()
     for doc_id, text in spec.policy_docs:
         vector.add(doc_id, text)
@@ -62,8 +62,8 @@ def load_supply_chain(path=None, llm=None, vector=None):
     s = GraphStore()
     for node in spec.nodes:
         s.add_node(node)
-    for src, dst, etype in spec.edges:
-        s.add_edge(src, dst, etype)
+    for src, dst, etype, weight in spec.edges:
+        s.add_edge(src, dst, etype, weight)
     vector = vector or FakeVector()
     for doc_id, text in spec.policy_docs:
         vector.add(doc_id, text)
