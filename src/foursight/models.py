@@ -35,6 +35,24 @@ class TriggerType(str, Enum):
     NODE_FIRED = "node_fired"
 
 
+class FieldRule(BaseModel):
+    """Per-field expected value + severity mapping on leaf data sources."""
+    field: str                       # e.g. "salary_variance"
+    kind: str = "structured"         # "structured" | "unstructured"
+    operator: str = "<"              # "<" | ">" | "==" | ">=" | "<="  (structured only)
+    expected: float = 0.0            # threshold value (structured only)
+    severity_on_breach: Severity = Severity.MEDIUM  # severity assigned when rule fires
+
+
+class Signal(BaseModel):
+    """Unit of propagation through the graph."""
+    source_node: str                 # which node emitted this
+    score: float                     # 0-100
+    cause: str = ""                  # textual explanation (redacted if sensitivity gates it)
+    severity: Severity               # LOW | MEDIUM | HIGH | CRITICAL
+    sensitivity: Sensitivity = Sensitivity.INTERNAL  # clearance level for cause text
+
+
 class Role(str, Enum):
     REVIEWER = "reviewer"
     PRIVILEGED = "privileged"
@@ -55,8 +73,8 @@ class DataBinding(BaseModel):
     query: str = ""
     sensitivity: Sensitivity = Sensitivity.INTERNAL
     min_disclosure: Sensitivity = Sensitivity.INTERNAL
-    threshold_rules: list[dict] = Field(default_factory=list)
-    raw_value: float | None = None
+    field_rules: list[FieldRule] = Field(default_factory=list)
+    raw_values: dict[str, float] = Field(default_factory=dict)
 
 
 class ChangeEvent(BaseModel):
@@ -97,6 +115,7 @@ class Assessment(BaseModel):
     delta: float = 0.0
     sensitivity: Sensitivity = Sensitivity.INTERNAL
     change: Optional[ChangeEvent] = None
+    signal: Optional[Signal] = None
 
 
 class DriverBullet(BaseModel):
@@ -130,14 +149,16 @@ class Node(BaseModel):
     pending_change: Optional[ChangeEvent] = None
     pending_delta: float = 0.0
     description: str = ""
-    trigger_threshold: float = 25.0
     delta_accumulator: float = 0.0
+    inbound_signals: list[Signal] = Field(default_factory=list)
+    outbound_signal: Optional[Signal] = None
 
 
 class Edge(BaseModel):
     src: str
     dst: str
     type: EdgeType
+    weight: Severity = Severity.MEDIUM  # CRITICAL | HIGH | MEDIUM | LOW — edge importance
 
 
 class Viewer(BaseModel):
