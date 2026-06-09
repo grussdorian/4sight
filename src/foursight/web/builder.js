@@ -544,7 +544,12 @@ function selectNode(nid){
     n.raw_values=d.raw_values||{};
     n.inbound_signals=d.inbound_signals||[];
     n.outbound_signal=d.outbound_signal||null;
+    n.query=d.query||"";
+    n.adapter_id=d.adapter_id||"";
     document.getElementById("panel-desc").value=n.description||"";
+    // Surface the SQL query for data-source (leaf) nodes.
+    document.getElementById("panel-adapter").value=d.adapter_id||"";
+    document.getElementById("panel-query").value=d.query||"";
     renderFieldRules(d.field_rules||[]);
     renderSignals(d.inbound_signals||[], d.outbound_signal);
     // Direction-correct: "I depend on" = inputs (what flows into this node);

@@ -91,6 +91,8 @@ class DeepSeekLLM:
 
     def __init__(self) -> None:
         from anthropic import Anthropic
+        # Model is overridable via env (deepseek-v4-flash | deepseek-v4-pro | ...).
+        self.model = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
         self._client = Anthropic(api_key=os.environ["DEEPSEEK_API_KEY"],
                                  base_url="https://api.deepseek.com/anthropic")
 
@@ -107,7 +109,7 @@ class DeepSeekLLM:
         resp = self._client.messages.create(
             model=self.model,
             max_tokens=2048,
-            thinking={"type": "enabled", "budget_tokens": 32000},
+            thinking={"type": "enabled", "budget_tokens": 4096},
             system=(
                 "You are an operational risk assessor for a semiconductor supply chain. "
                 "Your job is to verify or adjust a rule-based risk score (0-100) using "
@@ -155,7 +157,7 @@ class DeepSeekLLM:
         resp = self._client.messages.create(
             model=self.model,
             max_tokens=512,
-            thinking={"type": "enabled", "budget_tokens": 10000},
+            thinking={"type": "enabled", "budget_tokens": 2048},
             system=(
                 "You are a risk report writer for a semiconductor supply chain. "
                 "Your audience is operations leadership. Write concise, factual summaries "
@@ -196,7 +198,7 @@ class DeepSeekLLM:
         resp = self._client.messages.create(
             model=self.model,
             max_tokens=2048,
-            thinking={"type": "enabled", "budget_tokens": 8000},
+            thinking={"type": "enabled", "budget_tokens": 4096},
             system=(
                 "You are a risk synthesis engine. You receive upstream signals from a "
                 "task's dependencies, each arriving through an edge with a weight tag "
@@ -242,7 +244,7 @@ class DeepSeekLLM:
         resp = self._client.messages.create(
             model=self.model,
             max_tokens=4096,
-            thinking={"type": "enabled", "budget_tokens": 8000},
+            thinking={"type": "enabled", "budget_tokens": 4096},
             system=system,
             messages=[{"role": "user", "content": prompt}],
         )

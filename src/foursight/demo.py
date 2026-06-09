@@ -8,9 +8,9 @@ from .api import build_app
 from .seed import load_supply_chain
 
 
-def _context_llm():
-    """Real DeepSeek for the lazy, on-click unstructured context summaries.
-    Falls back to the deterministic FakeLLM summary if unavailable."""
+def _llm():
+    """Real DeepSeek (deepseek-v4-flash by default; override via DEEPSEEK_MODEL).
+    Falls back to the deterministic FakeLLM if unavailable."""
     try:
         from .llm import DeepSeekLLM
         return DeepSeekLLM()
@@ -28,8 +28,9 @@ def _vector():
 
 
 # Fab 17 supply-chain demo: SQLite-backed (foursight.db), real SQL polling,
-# real Chroma vector search, and real DeepSeek context summaries (lazy, on
-# click). Risk scoring stays on the fast, deterministic FakeLLM so inject and
-# the cascade update instantly; the unstructured summaries use DeepSeek.
+# real Chroma vector search, and real DeepSeek for both risk scoring and the
+# lazy unstructured context summaries. (Engine assessment now uses DeepSeek, so
+# boot and inject run live LLM calls; thinking budgets are trimmed to keep it
+# responsive.)
 app = build_app(seed_fn=load_supply_chain, db_path="foursight.db",
-                vector=_vector(), context_llm=_context_llm())
+                llm=_llm(), vector=_vector())
