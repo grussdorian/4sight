@@ -5,7 +5,7 @@ from foursight.models import EdgeType
 def test_fixture_has_required_structures():
     spec = parse_supply_chain()
     incoming, outgoing, has_conf = {}, {}, False
-    for src, dst, etype in spec.edges:
+    for src, dst, etype, weight in spec.edges:
         incoming[dst] = incoming.get(dst, 0) + 1
         outgoing[src] = outgoing.get(src, 0) + 1
     for n in spec.nodes:

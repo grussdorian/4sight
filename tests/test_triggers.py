@@ -6,25 +6,25 @@ from foursight.models import Node, NodeKind, EdgeType
 def _build_chain():
     s = GraphStore()
     for nid, kind in [("root", NodeKind.TASK), ("mid", NodeKind.TASK), ("leaf", NodeKind.LEAF)]:
-        s.add_node(Node(id=nid, kind=kind, title=nid, trigger_threshold=25.0))
+        s.add_node(Node(id=nid, kind=kind, title=nid))
     s.add_edge("root", "mid", EdgeType.DECOMPOSITION)
     s.add_edge("mid", "leaf", EdgeType.DECOMPOSITION)
     return s
 
 
-def test_accumulator_below_threshold_does_not_fire():
+def test_zero_accumulator_does_not_fire():
     store = _build_chain()
     leaf = store.get_node("leaf")
-    leaf.delta_accumulator = 10.0
+    leaf.delta_accumulator = 0.0
     eng = TriggerEngine(store)
     fired = eng.check_and_fire()
     assert "leaf" not in fired
 
 
-def test_accumulator_at_threshold_fires():
+def test_positive_accumulator_fires():
     store = _build_chain()
     leaf = store.get_node("leaf")
-    leaf.delta_accumulator = 30.0
+    leaf.delta_accumulator = 1.0
     eng = TriggerEngine(store)
     fired = eng.check_and_fire()
     assert "leaf" in fired

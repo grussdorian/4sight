@@ -14,7 +14,7 @@ class TriggerEngine:
         fired: list[str] = []
         for nid in self.store.all_ids():
             node = self.store.get_node(nid)
-            if node.delta_accumulator >= node.trigger_threshold:
+            if node.delta_accumulator > 0:
                 fired.append(nid)
                 node.delta_accumulator = 0.0
         return fired

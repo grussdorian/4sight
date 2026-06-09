@@ -20,5 +20,8 @@ def test_crawl_invariants(seed):
                        at=datetime.now(timezone.utc), sensitivity=Sensitivity.INTERNAL))
     changed = eng.fire_node(origin)
     assert len(changed) == len(set(changed))          # each node assessed at most once per crawl
-    again = eng.fire_node(origin)                      # re-fire with no new data
-    assert again == [origin]                           # idempotent: stops at the origin
+    # With EPSILON removed, re-fire propagates through full cone.
+    # All nodes with signals will be visited.
+    again = eng.fire_node(origin)
+    assert origin in again                            # origin always in result
+    assert len(again) <= len(changed)                 # no more nodes than first run

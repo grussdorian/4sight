@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
-from .models import ChangeEvent, Sensitivity, Viewer, Role, Node, NodeKind, EdgeType
+from .models import ChangeEvent, Sensitivity, Viewer, Role, Node, NodeKind, EdgeType, Severity
 
 WEB = Path(__file__).parent / "web"
 

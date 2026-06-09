@@ -10,8 +10,25 @@ def _task(s, nid, title):
 
 
 def _leaf(s, nid, title, sens=Sensitivity.INTERNAL):
+    from .models import FieldRule, Severity as Sev
     s.add_node(Node(id=nid, kind=NodeKind.LEAF, title=title,
-                    data_binding=DataBinding(adapter_id=nid, sensitivity=sens), raw={}))
+                    data_binding=DataBinding(
+                        adapter_id=nid, sensitivity=sens,
+                        field_rules=[
+                            FieldRule(field="effect_score", kind="structured", operator=">=",
+                                      expected=75.0, severity_on_breach=Sev.CRITICAL),
+                            FieldRule(field="effect_score", kind="structured", operator=">=",
+                                      expected=50.0, severity_on_breach=Sev.HIGH),
+                            FieldRule(field="effect_score", kind="structured", operator=">=",
+                                      expected=25.0, severity_on_breach=Sev.MEDIUM),
+                            FieldRule(field="capacity_drop_pct", kind="structured", operator=">=",
+                                      expected=50.0, severity_on_breach=Sev.HIGH),
+                            FieldRule(field="single_owner", kind="structured", operator="==",
+                                      expected=1.0, severity_on_breach=Sev.CRITICAL),
+                            FieldRule(field="data_age_h", kind="structured", operator=">",
+                                      expected=120.0, severity_on_breach=Sev.MEDIUM),
+                        ],
+                    ), raw={}))
 
 
 def build_seed(llm=None, vector=None):

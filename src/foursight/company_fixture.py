@@ -33,6 +33,24 @@ def parse_company(path: str | Path = FIXTURES) -> CompanySpec:
                     )
                     for fr in raw_frs
                 ]
+            else:
+                # Backward compat: old topology JSONs without field_rules
+                # Use severity thresholds matching the old severity_from_score:
+                # <25 LOW, <50 MEDIUM, <75 HIGH, >=75 CRITICAL
+                field_rules = [
+                    FieldRule(field="effect_score", kind="structured", operator=">=",
+                              expected=75.0, severity_on_breach=Severity.CRITICAL),
+                    FieldRule(field="effect_score", kind="structured", operator=">=",
+                              expected=50.0, severity_on_breach=Severity.HIGH),
+                    FieldRule(field="effect_score", kind="structured", operator=">=",
+                              expected=25.0, severity_on_breach=Severity.MEDIUM),
+                    FieldRule(field="capacity_drop_pct", kind="structured", operator=">",
+                              expected=50.0, severity_on_breach=Severity.HIGH),
+                    FieldRule(field="single_owner", kind="structured", operator="==",
+                              expected=1.0, severity_on_breach=Severity.CRITICAL),
+                    FieldRule(field="data_age_h", kind="structured", operator=">",
+                              expected=120.0, severity_on_breach=Severity.MEDIUM),
+                ]
             binding = DataBinding(
                 adapter_id=n["id"],
                 sensitivity=Sensitivity(n.get("sensitivity", "internal")),

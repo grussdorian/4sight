@@ -35,8 +35,8 @@ def _build_leaf_signal(node: Node, rule_score: float, rule_inputs: dict,
     final_score = max(rule_score, llm_verdict.final_score if llm_verdict else 0.0)
     severity = severity_from_score(final_score)
 
-    sensitivity_val = binding.sensitivity if binding else Severity.MEDIUM
-    min_disc = binding.min_disclosure if binding else Severity.MEDIUM
+    sensitivity_val = binding.sensitivity if binding else Sensitivity.INTERNAL
+    min_disc = binding.min_disclosure if binding else Sensitivity.INTERNAL
 
     return Signal(
         source_node=node.id,
@@ -182,37 +182,27 @@ def assess(node: Node, store: GraphStore, llm, vector, triggered_by: dict) -> As
 
     if prompt is None:
         # No upstream signals — no assessment
+        grounding = vector.query(node.title, k=2)
         signal = None
         verdict_score = rule.score
-        verdict = None
+        verdict = LLMVerdict(final_score=rule.score, severity=Severity.LOW,
+                             rationale="no upstream signals", model=llm.model)
     else:
-        # Call LLM to synthesize
-        import json as _json
+        # Call LLM to synthesize — use verify_score for single-node synthesis
         grounding = vector.query(node.title, k=2)
         try:
-            raw_resp = llm.batch_assess(
-                system=(
-                    "You are a risk synthesis engine. You receive upstream signals "
-                    "from a task's dependencies. Each signal arrives through an edge "
-                    "with a weight tag indicating how important that connection is. "
-                    "Synthesize them into one risk assessment."
-                ),
-                prompt=prompt,
+            verdict = llm.verify_score(
+                node=node, rule_score=rule.score,
+                rule_inputs={"synthesis_prompt": prompt, **rule.inputs},
+                grounding=grounding,
             )
-            data = _json.loads(raw_resp)
         except Exception:
-            data = {"score": rule.score, "severity": "medium", "cause": "synthesis failed"}
-
-        verdict_score = float(data.get("score", rule.score))
-        sev_str = data.get("severity", "medium")
-        sev = Severity(sev_str) if sev_str in [s.value for s in Severity] else Severity.MEDIUM
-
-        verdict = LLMVerdict(
-            final_score=verdict_score, severity=sev,
-            rationale=data.get("cause", ""),
-            adjusted=True, model=llm.model,
-            raw_response=str(data),
-        )
+            verdict = LLMVerdict(
+                final_score=rule.score, severity=Severity.MEDIUM,
+                rationale="synthesis failed", adjusted=True, model=llm.model,
+                raw_response="",
+            )
+        verdict_score = verdict.final_score
 
         base_sens = combine_sensitivity(
             [a.sensitivity for a in (children + deps)], node)

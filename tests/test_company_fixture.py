@@ -4,7 +4,7 @@ from foursight.models import EdgeType
 def test_fixture_has_required_structures():
     spec = parse_company()
     parents, children, has_dep = {}, {}, False
-    for src, dst, etype in spec.edges:
+    for src, dst, etype, weight in spec.edges:
         if etype == EdgeType.DECOMPOSITION:
             parents[dst] = parents.get(dst, 0) + 1
             children[src] = children.get(src, 0) + 1

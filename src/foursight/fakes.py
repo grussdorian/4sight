@@ -59,9 +59,12 @@ class FakeStore:
     def find_duplicate_source(self, binding):
         return None
 
-    def add_edge(self, src, dst, etype):
-        from .models import Edge
-        self._edges.append(Edge(src=src, dst=dst, type=etype))
+    def add_edge(self, src, dst, etype, weight=None):
+        from .models import Edge, Severity as Sev
+        edge = Edge(src=src, dst=dst, type=etype)
+        if weight is not None:
+            edge.weight = weight
+        self._edges.append(edge)
         if etype.value == "decomposition":
             if src not in self._children:
                 self._children[src] = []

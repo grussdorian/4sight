@@ -24,7 +24,7 @@ def test_save_and_load_roundtrip():
 def test_new_fields_persist():
     store = GraphStore()
     node = Node(id="n1", kind=NodeKind.TASK, title="Node",
-                description="desc", trigger_threshold=40.0, delta_accumulator=15.0)
+                description="desc", delta_accumulator=15.0)
     store.add_node(node)
     conn = sqlite3.connect(":memory:")
     init_db(conn)
@@ -32,5 +32,4 @@ def test_new_fields_persist():
     loaded = load_graph(conn)
     n = loaded.get_node("n1")
     assert n.description == "desc"
-    assert n.trigger_threshold == 40.0
     assert n.delta_accumulator == 15.0
