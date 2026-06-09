@@ -6,6 +6,8 @@ var draggingNode=null, dragOffX=0, dragOffY=0;
 var selectedNode=null;
 var portDrag=null, portLine=null;
 var creatingKind=null;
+var pendingEdge=null;
+var pendingEdgeWeight="medium";
 var NODE_W=150, NODE_H=52, PORT_R=6;
 
 var COLORS={critical:"#dc2626",high:"#ea580c",medium:"#ca8a04",low:"#16a34a",none:"#9ca3af",
@@ -61,7 +63,7 @@ function onWheel(e){
 async function loadGraph(){
   var r=await fetch("/builder/graph"); var d=await r.json();
   d.nodes.forEach(function(n){graph.nodes[n.id]=n;});
-  graph.edges=d.edges;
+  graph.edges=d.edges.map(function(e){return {src:e.src, dst:e.dst, type:e.type, weight:e.weight||"medium"};});
   if(Object.keys(nodePositions).length===0){
     layoutGraph();
   }
@@ -72,15 +74,12 @@ async function loadGraph(){
 function layoutGraph(){
   var allNids=Object.keys(graph.nodes);
   if(allNids.length===0) return;
-
-  // Assign layers via reverse BFS: sinks (root) at top, sources (leaves) at bottom
   var layers={};
   allNids.forEach(function(nid){
     var hasOutgoing=(graph.edges||[]).some(function(e){return e.src===nid;});
-    if(!hasOutgoing) layers[nid]=0; // sinks = layer 0 (top)
+    if(!hasOutgoing) layers[nid]=0;
   });
   if(Object.keys(layers).length===0) layers[allNids[0]]=0;
-
   var changed=true;
   while(changed){ changed=false;
     allNids.forEach(function(nid){
@@ -97,14 +96,12 @@ function layoutGraph(){
     });
   }
   allNids.forEach(function(nid){if(layers[nid]===undefined) layers[nid]=0;});
-
   var layerGroups={};
   allNids.forEach(function(nid){
     var l=layers[nid];
     if(!layerGroups[l]) layerGroups[l]=[];
     layerGroups[l].push(nid);
   });
-
   var keys=Object.keys(layerGroups).map(Number).sort(function(a,b){return a-b;});
   var spacing=200, rowH=120, startY=80;
   keys.forEach(function(l){
@@ -115,7 +112,6 @@ function layoutGraph(){
       nodePositions[nid]={x:startX+i*spacing, y:startY+l*rowH};
     });
   });
-
   var maxX=0,maxY=0;
   allNids.forEach(function(nid){
     var p=nodePositions[nid]; if(!p) return;
@@ -167,7 +163,14 @@ function onMouseUp(e){
   if(draggingNode){draggingNode=null;svgEl.classList.remove("dragging");}
   if(portDrag){
     var snap=findSnapNode(e.clientX,e.clientY);
-    if(snap&&snap!==portDrag.from) addEdge(portDrag.from,snap);
+    if(snap&&snap!==portDrag.from){
+      var fromNode=graph.nodes[portDrag.from];
+      if(fromNode&&fromNode.kind==="leaf"){
+        addEdge(portDrag.from, snap);
+      }else{
+        addEdge(portDrag.from, snap);
+      }
+    }
     if(portLine){portLine.remove();portLine=null;}
     portDrag=null;svgEl.classList.remove("dragging");render();
   }
@@ -218,9 +221,68 @@ function neighborsOf(nid){
 function addEdge(fromId,toId){
   var exists=(graph.edges||[]).some(function(e){return e.src===fromId&&e.dst===toId;});
   if(exists) return;
-  graph.edges.push({src:fromId,dst:toId});
-  fetch("/builder/edges",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({src:fromId,dst:toId,type:"dependency"})});
+  pendingEdge={from:fromId, to:toId};
+  pendingEdgeWeight="medium";
+  showWeightPicker(fromId, toId);
+}
+
+function showWeightPicker(fromId, toId){
+  removeWeightPicker();
+  var fromTitle=(graph.nodes[fromId]&&graph.nodes[fromId].title)||fromId;
+  var toTitle=(graph.nodes[toId]&&graph.nodes[toId].title)||toId;
+  var div=document.createElement("div");
+  div.className="weight-picker";
+  div.id="weight-picker-popup";
+  var weights=["critical","high","medium","low"];
+  var html='<div style="padding:8px 16px;font-size:12px;color:#6b7280;border-bottom:1px solid #e5e7eb;">'+
+    esc(fromTitle)+' &rarr; '+esc(toTitle)+'</div>';
+  weights.forEach(function(w){
+    html+='<div class="w-row'+(w===pendingEdgeWeight?" selected":"")+
+      '" onclick="selectWeight(\''+w+'\')">'+
+      w.charAt(0).toUpperCase()+w.slice(1)+(w==="medium"?" (default)":"")+
+      '</div>';
+  });
+  html+='<div class="w-actions">'+
+    '<button onclick="cancelWeightPicker()">Cancel</button>'+
+    '<button class="confirm" onclick="confirmWeightPicker()">Confirm</button>'+
+    '</div>';
+  div.innerHTML=html;
+  div.style.left=Math.min(window.innerWidth-200, Math.max(100, window.innerWidth/2-90))+"px";
+  div.style.top=Math.min(window.innerHeight-160, Math.max(100, window.innerHeight/2-80))+"px";
+  document.body.appendChild(div);
+  document.addEventListener("click",function rm(e){
+    if(!e.target.closest("#weight-picker-popup")){
+      cancelWeightPicker();
+      document.removeEventListener("click",rm);
+    }
+  });
+}
+
+function selectWeight(w){
+  pendingEdgeWeight=w;
+  var rows=document.querySelectorAll("#weight-picker-popup .w-row");
+  rows.forEach(function(r){ r.classList.toggle("selected", r.textContent.trim().toLowerCase().startsWith(w)); });
+}
+
+function confirmWeightPicker(){
+  if(!pendingEdge) return;
+  var fromId=pendingEdge.from, toId=pendingEdge.to;
+  graph.edges.push({src:fromId, dst:toId, type:"dependency", weight:pendingEdgeWeight});
+  fetch("/builder/edges",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({src:fromId, dst:toId, type:"dependency", weight:pendingEdgeWeight})});
+  removeWeightPicker();
+  pendingEdge=null;
   layoutGraph(); render();
+}
+
+function cancelWeightPicker(){
+  removeWeightPicker();
+  pendingEdge=null;
+}
+
+function removeWeightPicker(){
+  var el=document.getElementById("weight-picker-popup");
+  if(el) el.remove();
 }
 
 // --- Render ---
@@ -239,18 +301,26 @@ function render(){
     var from=nodePositions[e.src],to=nodePositions[e.dst];
     if(!from||!to) return;
     var active=anySelected?(highlight[e.src]&&highlight[e.dst]):true;
+    var weight=e.weight||"medium";
+    var widths={critical:3, high:2, medium:1.5, low:1};
+    var opacities={critical:1, high:0.8, medium:0.6, low:0.35};
+    var w=widths[weight]||1.5;
+    var op=active?opacities[weight]||0.6:0.15;
+    var dash=weight==="low"?"4 3":"none";
     var strokeCol=active?COLORS.edge:"#d1d5db";
-    var opacity=active?1:0.15;
-    var x1=from.x+NODE_W/2,y1=from.y+NODE_H; // source bottom (exit)
-    var x2=to.x+NODE_W/2,y2=to.y;             // target top (enter)
+    var x1=from.x+NODE_W/2,y1=from.y+NODE_H;
+    var x2=to.x+NODE_W/2,y2=to.y;
     var dy=Math.max(Math.abs(y2-y1)/3,20);
     var d="M"+x1+" "+y1+" C"+x1+" "+(y1-dy)+" "+x2+" "+(y2+dy)+" "+x2+" "+y2;
-    html+='<path d="'+d+'" fill="none" stroke="'+strokeCol+'" stroke-width="2" opacity="'+opacity+'"/>';
-    if(active){
-      var ang=Math.atan2(y2-y1,x2-x1),s=8;
+    html+='<path d="'+d+'" fill="none" stroke="'+strokeCol+'" stroke-width="'+w+'" stroke-dasharray="'+dash+'" opacity="'+op+'"/>';
+    if(active&&w>=1.5){
+      var ang=Math.atan2(y2-y1,x2-x1),s=Math.max(6,w*3);
       var mx=(x1+x2)/2,my=(y1+y2)/2;
       var pts=(mx-s*Math.cos(ang-0.5))+","+(my-s*Math.sin(ang-0.5))+" "+(mx-s*Math.cos(ang+0.5))+","+(my-s*Math.sin(ang+0.5))+" "+mx+","+my;
       html+='<polygon points="'+pts+'" fill="'+strokeCol+'"/>';
+      var labels={critical:"CRIT", high:"HIGH", medium:"MED", low:"LOW"};
+      var lbl=labels[weight]||"";
+      html+='<text x="'+(mx+8)+'" y="'+(my-6)+'" class="edge-weight-label" opacity="'+op+'">'+lbl+'</text>';
     }
   });
 
@@ -296,17 +366,19 @@ function startCreate(kind){
   document.getElementById("panel-name").value="";
   document.getElementById("panel-desc").value="";
   document.getElementById("panel-kind").value=kind;
-  document.getElementById("panel-threshold").value=25;
-  document.getElementById("panel-threshold-val").textContent="25";
-  document.getElementById("btn-inject").disabled=true;
+  document.getElementById("panel-field-rules").innerHTML="";
+  document.getElementById("panel-inbound-signals").innerHTML="";
+  document.getElementById("panel-outbound-signal").innerHTML="";
   document.getElementById("btn-delete").style.display="none";
   document.getElementById("panel-relations").style.display="none";
   onKindChange();
 }
 
 function onKindChange(){
-  document.getElementById("panel-leaf-fields").style.display=
-    document.getElementById("panel-kind").value==="leaf"?"block":"none";
+  var isLeaf=document.getElementById("panel-kind").value==="leaf";
+  document.getElementById("panel-leaf-fields").style.display=isLeaf?"block":"none";
+  document.getElementById("panel-field-rules-section").style.display=isLeaf?"block":"none";
+  document.getElementById("panel-signals").style.display=isLeaf?"none":"block";
 }
 
 async function hashId(name){
@@ -320,12 +392,12 @@ async function saveNodePanel(){
   if(!name){alert("Name required");return;}
   var kind=document.getElementById("panel-kind").value;
   var desc=document.getElementById("panel-desc").value;
-  var thr=parseFloat(document.getElementById("panel-threshold").value);
   var nid=creatingKind?await hashId(name):selectedNode;
-  var body={id:nid,kind:kind,title:name,description:desc,trigger_threshold:thr};
+  var body={id:nid,kind:kind,title:name,description:desc};
   if(kind==="leaf"){
     body.adapter_id=document.getElementById("panel-adapter").value||"generic";
     body.query=document.getElementById("panel-query").value||"";
+    body.field_rules=collectFieldRules();
   }
   fetch("/builder/nodes",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).then(function(r){return r.json();}).then(function(d){
     if(d.deduped) nid=d.id;
@@ -340,6 +412,119 @@ async function saveNodePanel(){
   });
 }
 
+// --- Field rules ---
+function collectFieldRules(){
+  var rules=[];
+  var rows=document.querySelectorAll(".field-rule-row");
+  rows.forEach(function(row){
+    var fieldName=row.querySelector(".fr-field").value.trim();
+    if(!fieldName) return;
+    var kind=row.querySelector(".fr-kind").value;
+    var rule={field:fieldName, kind:kind};
+    if(kind==="structured"){
+      rule.operator=row.querySelector(".fr-op").value;
+      rule.expected=parseFloat(row.querySelector(".fr-expected").value)||0;
+    }
+    rule.severity_on_breach=row.querySelector(".fr-severity").value;
+    rules.push(rule);
+  });
+  return rules;
+}
+
+function addFieldRule(){
+  var container=document.getElementById("panel-field-rules");
+  var row=document.createElement("div");
+  row.className="field-rule-row";
+  row.innerHTML=
+    '<input class="fr-field" type="text" placeholder="field name" style="flex:1;min-width:60px;">'+
+    '<select class="fr-kind" onchange="toggleFrKind(this)">'+
+      '<option value="structured">structured</option>'+
+      '<option value="unstructured">unstructured</option>'+
+    '</select>'+
+    '<span class="fr-structured-opts">'+
+      '<select class="fr-op"><option value="<"><</option><option value=">">></option>'+
+      '<option value="<=">&le;</option><option value=">=">&ge;</option>'+
+      '<option value="==">=</option></select>'+
+      '<input class="fr-expected" type="number" placeholder="val" style="width:50px;">'+
+    '</span>'+
+    '<select class="fr-severity">'+
+      '<option value="low">Low</option>'+
+      '<option value="medium" selected>Medium</option>'+
+      '<option value="high">High</option>'+
+      '<option value="critical">Critical</option>'+
+    '</select>'+
+    '<button class="fr-delete" onclick="this.closest(\'.field-rule-row\').remove()">&times;</button>';
+  container.appendChild(row);
+}
+
+function toggleFrKind(sel){
+  var opts=sel.parentElement.querySelector(".fr-structured-opts");
+  opts.style.display=sel.value==="unstructured"?"none":"";
+}
+
+function renderFieldRules(fieldRules){
+  var container=document.getElementById("panel-field-rules");
+  container.innerHTML="";
+  if(!fieldRules||!fieldRules.length) return;
+  fieldRules.forEach(function(fr){
+    var row=document.createElement("div");
+    row.className="field-rule-row";
+    var isStructured=fr.kind!=="unstructured";
+    row.innerHTML=
+      '<input class="fr-field" type="text" value="'+esc(fr.field||"")+'" style="flex:1;min-width:60px;">'+
+      '<select class="fr-kind" onchange="toggleFrKind(this)">'+
+        '<option value="structured"'+(isStructured?" selected":"")+'>structured</option>'+
+        '<option value="unstructured"'+(isStructured?"":" selected")+'>unstructured</option>'+
+      '</select>'+
+      '<span class="fr-structured-opts" style="display:'+(isStructured?"":"none")+'">'+
+        '<select class="fr-op">'+
+          '<option value="<"'+(fr.operator==="<"?" selected":"")+'><</option>'+
+          '<option value=">"'+(fr.operator===">"?" selected":"")+'>></option>'+
+          '<option value="<="'+(fr.operator==="<="?" selected":"")+'>&le;</option>'+
+          '<option value=">="'+(fr.operator===">="?" selected":"")+'>&ge;</option>'+
+          '<option value="=="'+(fr.operator==="=="?" selected":"")+'>=</option>'+
+        '</select>'+
+        '<input class="fr-expected" type="number" value="'+(fr.expected||0)+'" style="width:50px;">'+
+      '</span>'+
+      '<select class="fr-severity">'+
+        '<option value="low"'+(fr.severity_on_breach==="low"?" selected":"")+'>Low</option>'+
+        '<option value="medium"'+(fr.severity_on_breach==="medium"?" selected":"")+'>Medium</option>'+
+        '<option value="high"'+(fr.severity_on_breach==="high"?" selected":"")+'>High</option>'+
+        '<option value="critical"'+(fr.severity_on_breach==="critical"?" selected":"")+'>Critical</option>'+
+      '</select>'+
+      '<button class="fr-delete" onclick="this.closest(\'.field-rule-row\').remove()">&times;</button>';
+    container.appendChild(row);
+  });
+}
+
+// --- Signal display ---
+function renderSignals(inbound, outbound){
+  var inEl=document.getElementById("panel-inbound-signals");
+  inEl.innerHTML="";
+  (inbound||[]).forEach(function(s){
+    var sevClass="sev-"+(s.severity||"medium");
+    inEl.innerHTML+=
+      '<div class="signal-item '+sevClass+'">'+
+      esc(s.source_node||"")+' &rarr; score '+(s.score||0)+
+      ' <span class="sig-weight">('+esc(s.severity||"")+')</span>'+
+      '<div style="color:#9ca3af;margin-top:2px;">'+esc(s.cause||"")+'</div>'+
+      '</div>';
+  });
+  if(!inbound||!inbound.length){
+    inEl.innerHTML='<span style="opacity:0.4;font-size:11px;">No upstream signals yet</span>';
+  }
+  var outEl=document.getElementById("panel-outbound-signal");
+  if(outbound){
+    outEl.innerHTML=
+      '<div class="signal-item sev-'+(outbound.severity||"medium")+'">'+
+      'score '+outbound.score+' ('+esc(outbound.severity||"")+')'+
+      '<div style="color:#9ca3af;margin-top:2px;">'+esc(outbound.cause||"")+'</div>'+
+      '</div>';
+  }else{
+    outEl.innerHTML='<span style="opacity:0.4;font-size:11px;">Not assessed yet</span>';
+  }
+}
+
 function selectNode(nid){
   if(!nid){ closePanel(); return; }
   selectedNode=nid; creatingKind=null;
@@ -349,23 +534,18 @@ function selectNode(nid){
   document.getElementById("panel-name").value=n.title||"";
   document.getElementById("panel-desc").value=n.description||"";
   document.getElementById("panel-kind").value=n.kind||"task";
-  document.getElementById("panel-threshold").value=n.trigger_threshold||25;
-  document.getElementById("panel-threshold-val").textContent=n.trigger_threshold||25;
   document.getElementById("panel-relations").style.display="block";
   document.getElementById("btn-delete").style.display="block";
-  var hasRules=n.threshold_rules&&n.threshold_rules.length>0;
-  document.getElementById("btn-inject").disabled=!hasRules;
   onKindChange();
   fetch("/builder/nodes/"+nid).then(function(r){return r.json();}).then(function(d){
     n.description=d.description||n.description||"";
-    n.threshold_rules=d.threshold_rules||[];
-    n.raw_value=d.raw_value;
-    n.trigger_threshold=d.trigger_threshold;
+    n.field_rules=d.field_rules||[];
+    n.raw_values=d.raw_values||{};
+    n.inbound_signals=d.inbound_signals||[];
+    n.outbound_signal=d.outbound_signal||null;
     document.getElementById("panel-desc").value=n.description||"";
-    document.getElementById("panel-threshold").value=n.trigger_threshold||25;
-    document.getElementById("panel-threshold-val").textContent=n.trigger_threshold||25;
-    hasRules=n.threshold_rules&&n.threshold_rules.length>0;
-    document.getElementById("btn-inject").disabled=!hasRules;
+    renderFieldRules(d.field_rules||[]);
+    renderSignals(d.inbound_signals||[], d.outbound_signal);
     var seenI={}, seenD={};
     var iDepend=[], depOnMe=[];
     (d.children||[]).forEach(function(c){if(!seenI[c]){seenI[c]=true;iDepend.push({id:c});}});
@@ -392,7 +572,6 @@ function closePanel(){
   document.getElementById("panel-title").textContent="New Node";
   document.getElementById("panel-relations").style.display="none";
   document.getElementById("btn-delete").style.display="none";
-  document.getElementById("btn-inject").disabled=true;
   render();
 }
 
@@ -428,15 +607,21 @@ async function runBatchAssess(){
 async function injectProblem(nodeId){
   if(!nodeId) return;
   var n=graph.nodes[nodeId];
-  if(!n||!n.threshold_rules||!n.threshold_rules.length){alert("No threshold rules.");return;}
-  var rule=n.threshold_rules[0];
-  var cur=n.raw_value!=null?n.raw_value:rule.value;
-  var bad=parseFloat(prompt("Inject problem for "+n.title+"\nRule: "+rule.field+" "+rule.operator+" "+rule.value+"\nCurrent: "+cur,rule.operator==="<"?Math.max(0,rule.value-20):rule.value+20));
+  if(!n||!n.field_rules||!n.field_rules.length){alert("No field rules configured.");return;}
+  var fr=n.field_rules[0];
+  var field=fr.field;
+  var cur=n.raw_values&&n.raw_values[field]!=null?n.raw_values[field]:fr.expected;
+  var bad=parseFloat(prompt("Inject problem for "+n.title+"\nField: "+field+"\nCurrent value: "+cur+"\nExpected: "+fr.operator+" "+fr.expected,
+    fr.operator==="<"?Math.max(0,fr.expected-20):fr.expected+20));
   if(isNaN(bad)) return;
-  var r=await fetch("/builder/inject",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({node_id:nodeId,raw_value:bad})});
+  var rawValues=n.raw_values||{};
+  rawValues[field]=bad;
+  var r=await fetch("/builder/nodes/"+nodeId+"/raw-values",{method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({raw_values:rawValues})});
   var d=await r.json();
-  n.raw_value=d.raw_value;
-  alert("Injected. "+n.title+" raw_value = "+d.raw_value);
+  n.raw_values=d.raw_values;
+  alert("Injected. "+n.title+" "+field+" = "+bad);
 }
 
 function resetView(){ nodePositions={}; selectedNode=null; closePanel(); loadGraph(); }

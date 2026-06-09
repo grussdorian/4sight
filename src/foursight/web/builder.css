@@ -28,3 +28,110 @@ body { font-family: system-ui, sans-serif; background:#f3f4f6; color:#1f2937; ov
 .edge-decomp { stroke:#86a886; stroke-width:2; }
 .edge-dep { stroke:#7b8cc4; stroke-width:1.5; stroke-dasharray:6 3; }
 .edge-dragging { stroke:#1d4ed8; stroke-width:2; stroke-dasharray:4 2; }
+
+/* Field rule rows */
+.field-rule-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  margin: 4px 0;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  font-size: 11px;
+}
+.field-rule-row input, .field-rule-row select {
+  font-size: 11px;
+  padding: 3px 6px;
+  margin: 0;
+  width: auto;
+  min-width: 0;
+}
+.field-rule-row input[type="text"] { flex: 1; min-width: 60px; }
+.field-rule-row input[type="number"] { width: 50px; }
+.field-rule-row select { width: 90px; }
+.field-rule-row .fr-delete {
+  cursor: pointer;
+  color: #dc2626;
+  font-weight: bold;
+  font-size: 14px;
+  padding: 0 4px;
+  background: none;
+  border: none;
+}
+
+/* Signal display */
+.signal-item {
+  padding: 6px 8px;
+  margin: 3px 0;
+  border-left: 3px solid #9ca3af;
+  border-radius: 4px;
+  background: #f9fafb;
+  font-size: 11px;
+  color: #374151;
+}
+.signal-item.sev-low    { border-left-color: #16a34a; }
+.signal-item.sev-medium { border-left-color: #ca8a04; }
+.signal-item.sev-high   { border-left-color: #ea580c; }
+.signal-item.sev-critical { border-left-color: #dc2626; }
+.signal-item .sig-weight {
+  font-size: 10px;
+  color: #6b7280;
+  text-transform: uppercase;
+}
+
+/* Weight picker popover */
+.weight-picker {
+  position: fixed;
+  background: #ffffff;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  padding: 8px 0;
+  z-index: 300;
+  min-width: 180px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+.weight-picker .w-row {
+  padding: 6px 16px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.weight-picker .w-row:hover {
+  background: #f0f4ff;
+}
+.weight-picker .w-row.selected {
+  color: #1d4ed8;
+  font-weight: 600;
+}
+.weight-picker .w-actions {
+  display: flex;
+  gap: 8px;
+  padding: 8px 16px;
+  border-top: 1px solid #e5e7eb;
+  margin-top: 4px;
+}
+.weight-picker .w-actions button {
+  flex: 1;
+  padding: 4px 0;
+  font-size: 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 1px solid #d1d5db;
+  background: #f9fafb;
+}
+.weight-picker .w-actions button.confirm {
+  background: #1d4ed8;
+  color: #fff;
+  border-color: #1d4ed8;
+}
+
+/* Weight label on edges */
+.edge-weight-label {
+  font-size: 9px;
+  font-family: system-ui;
+  font-weight: 600;
+  fill: #6b7280;
+  text-anchor: middle;
+  pointer-events: none;
+}

@@ -32,8 +32,24 @@
       </div>
       <label>Description</label>
       <textarea id="panel-desc" placeholder="Describe this task"></textarea>
-      <label>Trigger threshold <span id="panel-threshold-val">25</span></label>
-      <input type="range" id="panel-threshold" min="0" max="100" value="25" oninput="document.getElementById('panel-threshold-val').textContent=this.value">
+
+      <!-- Field Rules (leaf nodes only) -->
+      <div id="panel-field-rules-section" style="display:none;">
+        <label style="display:flex;justify-content:space-between;align-items:center;">
+          Field Rules
+          <button id="btn-add-field-rule" onclick="addFieldRule()" style="width:auto;padding:2px 8px;font-size:11px;background:#1d4ed8;color:#fff;border:none;border-radius:4px;cursor:pointer;">+ Add</button>
+        </label>
+        <div id="panel-field-rules"></div>
+      </div>
+
+      <!-- Inbound Signals (task nodes, read-only) -->
+      <div id="panel-signals" style="display:none;">
+        <label>Inbound Signals</label>
+        <div id="panel-inbound-signals"></div>
+        <label>Outbound Signal</label>
+        <div id="panel-outbound-signal" style="font-size:12px;color:#6b7280;"></div>
+      </div>
+
       <div style="display:flex;gap:8px;margin-top:8px;">
         <button onclick="saveNodePanel()" style="flex:1;background:#1a3a5c;color:#e6e6e6;border:1px solid #2a5a8c;border-radius:6px;padding:8px;cursor:pointer;">Save</button>
         <button onclick="closePanel()" style="flex:1;background:#1a1d24;color:#e6e6e6;border:1px solid #2a2e36;border-radius:6px;padding:8px;cursor:pointer;">Cancel</button>
