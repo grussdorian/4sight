@@ -3,15 +3,19 @@
 <head>
   <meta charset="utf-8">
   <title>4sight -- Graph Builder</title>
-  <link rel="stylesheet" href="/static/builder.css?v=3">
+  <link rel="stylesheet" href="/static/builder.css?v=4">
 </head>
 <body>
   <div id="toolbar">
     <button id="btn-task" onclick="startCreate('task')">+ Task</button>
     <button id="btn-leaf" onclick="startCreate('leaf')">+ Data Source</button>
     <span class="sep"></span>
-    <button class="primary" onclick="runBatchAssess()">Run Assessment</button>
-    <button onclick="injectProblem(selectedNode)" id="btn-inject" disabled style="background:#dc262610;color:#dc2626;border-color:#dc262630;">Inject Problem</button>
+    <button class="primary" id="btn-assess" onclick="runAssessment()">Run Assessment</button>
+    <span id="assess-note" style="display:none;color:#b45309;font-size:12px;margin-left:8px;">values changed -- run assessment</span>
+  </div>
+  <div id="assess-status">
+    <div class="spinner"></div>
+    <span>Running assessment -- the LLM is evaluating the graph...</span>
   </div>
   <div id="main-area">
     <svg id="svg-canvas"></svg>
@@ -30,7 +34,9 @@
         <input id="panel-adapter" placeholder="csv">
         <label>Query</label>
         <textarea id="panel-query" placeholder="SQL or file path"></textarea>
-        <label>Current readings (from data source)</label>
+        <button onclick="testQuery()" style="width:auto;padding:3px 10px;font-size:11px;background:#0f766e;color:#fff;border:none;border-radius:4px;cursor:pointer;">Run query (test)</button>
+        <div id="query-test-result" style="font-size:11px;margin-top:4px;"></div>
+        <label>Current readings (editable -- changing a value injects a problem)</label>
         <div id="panel-readings" style="font-size:12px;color:#1f2937;"></div>
       </div>
       <label>Description</label>
@@ -72,7 +78,7 @@
       </div>
     </div>
   </div>
-  <script src="/static/builder.js?v=3"></script>
+  <script src="/static/builder.js?v=4"></script>
   <script>init();</script>
 </body>
 </html>

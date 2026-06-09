@@ -30,8 +30,18 @@ class PollService:
                 out.append(nid)
         return out
 
+    def _read(self, nid: str, query: str) -> dict[str, float]:
+        """A node's effective readings: its SQL query result, with any manual
+        leaf_metrics override for that node taking precedence. This lets a user
+        edit a reading (stored in leaf_metrics) and have it survive re-reads,
+        regardless of which table the node's own query targets."""
+        from .db import read_metrics
+        fetched = SqlSourceAdapter(self.conn, nid, query).fetch()
+        fetched.update(read_metrics(self.conn, nid))
+        return fetched
+
     def refresh(self, node_ids: list[str] | None = None) -> list[str]:
-        """Fetch each leaf's SQL data into its raw_values WITHOUT assessing.
+        """Fetch each leaf's data into its raw_values WITHOUT assessing.
         Returns the ids whose readings changed. Used by the batch-assessment
         path, where a single flattened LLM call does the scoring afterward."""
         targets = node_ids if node_ids is not None else self._leaf_ids()
@@ -40,7 +50,7 @@ class PollService:
             node = self.store.get_node(nid)
             if not (node.data_binding and node.data_binding.query):
                 continue
-            fetched = SqlSourceAdapter(self.conn, nid, node.data_binding.query).fetch()
+            fetched = self._read(nid, node.data_binding.query)
             prev = dict(node.data_binding.raw_values)
             node.data_binding.raw_values.update(fetched)
             if any(prev.get(f) != v for f, v in fetched.items()):
@@ -53,7 +63,7 @@ class PollService:
             node = self.store.get_node(nid)
             if not (node.data_binding and node.data_binding.query):
                 continue
-            fetched = SqlSourceAdapter(self.conn, nid, node.data_binding.query).fetch()
+            fetched = self._read(nid, node.data_binding.query)
             prev = dict(node.data_binding.raw_values)
             delta = sum(abs(v - prev.get(f, 0.0)) for f, v in fetched.items())
             node.data_binding.raw_values.update(fetched)

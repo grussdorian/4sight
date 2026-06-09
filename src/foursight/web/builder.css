@@ -33,6 +33,27 @@ body { font-family: system-ui, sans-serif; background:#f3f4f6; color:#1f2937; ov
 .edge-dragging { stroke:#1d4ed8; stroke-width:2; stroke-dasharray:4 2; }
 
 /* Field rule rows */
+#assess-status {
+  display: none;
+  position: fixed;
+  top: 48px; left: 0; right: 0;
+  z-index: 400;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: #1e293b;
+  color: #fff;
+  font-size: 13px;
+}
+.spinner {
+  width: 16px; height: 16px;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
 .reading-item {
   display: flex;
   justify-content: space-between;
@@ -45,6 +66,7 @@ body { font-family: system-ui, sans-serif; background:#f3f4f6; color:#1f2937; ov
   font-size: 12px;
 }
 .reading-item b { color: #1d4ed8; }
+.reading-item .reading-input { width: 96px; margin: 0; padding: 3px 6px; font-size: 12px; text-align: right; }
 
 .field-rule-row {
   display: flex;

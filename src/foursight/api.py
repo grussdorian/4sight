@@ -258,6 +258,54 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
         _assess_all()
         return {"changed": store.all_ids()}
 
+    @app.post("/node/{node_id}/readings")
+    def set_readings(node_id: str, body: dict):
+        """Manually set a leaf's current readings. Persisted to leaf_metrics (an
+        override that survives re-reads) so changing a reading is how you inject
+        a problem. Does NOT re-assess -- the UI then prompts 'Run Assessment'."""
+        if node_id not in store.nodes:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=404, content={"error": "not found"})
+        node = store.get_node(node_id)
+        if not node.data_binding:
+            return {"error": "not a leaf node"}
+        for field, value in (body.get("readings") or {}).items():
+            if value is None:
+                continue
+            set_metric(conn, node_id, field, float(value))
+            node.data_binding.raw_values[field] = float(value)
+        _persist()
+        return {"node_id": node_id, "raw_values": node.data_binding.raw_values}
+
+    @app.post("/assess")
+    def assess_now():
+        """Run a full assessment: refresh every node's readings from its data
+        source, then one flattened LLM pass. Returns the updated graph."""
+        _assess_all()
+        return get_builder_graph()
+
+    @app.post("/test-query")
+    def test_query(body: dict):
+        """Run a read-only SELECT and return its (field, value) readings, so a
+        new data-source query can be tested before the node is created."""
+        q = (body.get("query") or "").strip()
+        if not q.lower().startswith("select"):
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=400, content={"error": "only SELECT queries are allowed"})
+        try:
+            rows = conn.execute(q).fetchall()
+        except Exception as exc:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=400, content={"error": str(exc)})
+        readings = {}
+        for row in rows:
+            if len(row) >= 2 and row[1] is not None:
+                try:
+                    readings[str(row[0])] = float(row[1])
+                except (TypeError, ValueError):
+                    readings[str(row[0])] = row[1]
+        return {"readings": readings, "rows": [list(r) for r in rows]}
+
     @app.get("/node/{node_id}/context")
     def node_context(node_id: str):
         """Lazily generate (and cache) an LLM context summary grounded in a

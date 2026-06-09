@@ -574,9 +574,6 @@ function selectNode(nid){
   document.getElementById("panel-kind").value=n.kind||"task";
   document.getElementById("panel-relations").style.display="block";
   document.getElementById("btn-delete").style.display="block";
-  // Inject Problem is only meaningful on a leaf data source.
-  var injectBtn=document.getElementById("btn-inject");
-  if(injectBtn) injectBtn.disabled=(n.kind!=="leaf");
   onKindChange();
   fetch("/builder/nodes/"+nid).then(function(r){return r.json();}).then(function(d){
     n.description=d.description||n.description||"";
@@ -621,10 +618,60 @@ function renderReadings(rawValues){
   var el=document.getElementById("panel-readings");
   if(!el) return;
   var keys=Object.keys(rawValues||{});
-  if(!keys.length){ el.innerHTML="<span style='opacity:0.4;'>no readings yet</span>"; return; }
+  if(!keys.length){ el.innerHTML="<span style='opacity:0.4;'>no readings yet -- run the query / assessment</span>"; return; }
   el.innerHTML=keys.map(function(k){
-    return "<div class='reading-item'><span>"+esc(k)+"</span><b>"+esc(String(rawValues[k]))+"</b></div>";
-  }).join("");
+    return "<div class='reading-item'><span>"+esc(k)+"</span>"+
+      "<input class='reading-input' data-field='"+esc(k)+"' type='number' step='any' value='"+esc(String(rawValues[k]))+"'></div>";
+  }).join("")+
+  "<button onclick='saveReadings()' style='margin-top:6px;width:100%;padding:5px;font-size:12px;background:#1d4ed8;color:#fff;border:none;border-radius:4px;cursor:pointer;'>Save readings (write to DB)</button>";
+}
+
+function saveReadings(){
+  if(!selectedNode) return;
+  var readings={};
+  document.querySelectorAll("#panel-readings .reading-input").forEach(function(inp){
+    var v=parseFloat(inp.value); if(!isNaN(v)) readings[inp.getAttribute("data-field")]=v;
+  });
+  fetch("/node/"+selectedNode+"/readings",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({readings:readings})})
+    .then(function(r){return r.json();}).then(function(d){
+      if(graph.nodes[selectedNode]) graph.nodes[selectedNode].raw_values=d.raw_values;
+      markAssessmentStale();
+    });
+}
+
+function testQuery(){
+  var q=document.getElementById("panel-query").value.trim();
+  var out=document.getElementById("query-test-result");
+  if(!q){ out.style.color="#dc2626"; out.textContent="Enter a query first."; return; }
+  out.style.color="#6b7280"; out.textContent="Running query...";
+  fetch("/test-query",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({query:q})})
+    .then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d};});})
+    .then(function(res){
+      if(!res.ok){ out.style.color="#dc2626"; out.textContent="Error: "+(res.d.error||"query failed"); return; }
+      var rd=res.d.readings||{}; var keys=Object.keys(rd);
+      out.style.color="#15803d";
+      out.textContent=keys.length?("Reading: "+keys.map(function(k){return k+" = "+rd[k];}).join(", ")):"Query ran but returned no (field, value) rows.";
+    }).catch(function(e){ out.style.color="#dc2626"; out.textContent="Error: "+e; });
+}
+
+function markAssessmentStale(){
+  var btn=document.getElementById("btn-assess");
+  if(btn) btn.style.boxShadow="0 0 0 2px #f59e0b";
+  var note=document.getElementById("assess-note"); if(note) note.style.display="inline";
+}
+
+function clearAssessmentStale(){
+  var btn=document.getElementById("btn-assess");
+  if(btn) btn.style.boxShadow="";
+  var note=document.getElementById("assess-note"); if(note) note.style.display="none";
+}
+
+function showAssessStatus(on){
+  var s=document.getElementById("assess-status");
+  if(s) s.style.display=on?"flex":"none";
+  var btn=document.getElementById("btn-assess");
+  if(btn) btn.disabled=on;
 }
 
 function drillToNode(nid){
@@ -650,7 +697,9 @@ function deleteSelectedNode(){
 }
 
 // --- Actions ---
-async function runBatchAssess(){
+// Run a full assessment: the server re-reads every node's data source, then
+// runs one flattened LLM pass. Shows a processing status while the LLM runs.
+async function runAssessment(){
   var orphans=[];
   Object.keys(graph.nodes).forEach(function(nid){
     var hasEdge=(graph.edges||[]).some(function(e){return e.src===nid||e.dst===nid;});
@@ -659,13 +708,16 @@ async function runBatchAssess(){
   if(orphans.length>0){
     alert("Cannot run assessment. Orphan nodes:\n"+orphans.join(", ")); return;
   }
-  var r=await fetch("/builder/batch-assess",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({mode:"full"})});
-  var result=await r.json();
-  var assessments=result.assessments||result;
-  var violations=result.violations||[];
-  if(violations.length>0) console.log("Violations:",violations);
-  assessments.forEach(function(a){if(graph.nodes[a.node_id]){graph.nodes[a.node_id].severity=a.severity;}});
-  layoutGraph(); render();
+  showAssessStatus(true);
+  try{
+    var r=await fetch("/assess",{method:"POST"});
+    var d=await r.json();
+    (d.nodes||[]).forEach(function(n){ if(graph.nodes[n.id]) graph.nodes[n.id].severity=n.severity; });
+    clearAssessmentStale();
+    if(selectedNode) selectNode(selectedNode);   // refresh panel readings/signals
+    layoutGraph(); render();
+  }catch(e){ alert("Assessment failed: "+e); }
+  finally{ showAssessStatus(false); }
 }
 
 // Lazily fetch + render a node's Chroma-grounded LLM context summary.
@@ -680,37 +732,5 @@ async function loadNodeContext(nodeId){
   }catch(e){ el.textContent=""; }
 }
 
-function injectProblem(nodeId){
-  if(!nodeId) return;
-  removeInjectMenu();
-  var btn=document.getElementById("btn-inject");
-  var menu=document.createElement("div");
-  menu.className="weight-picker";
-  menu.id="inject-menu";
-  var levels=[["low","Reset (healthy)"],["medium","Medium"],["high","High"],["critical","Critical"]];
-  menu.innerHTML='<div style="padding:8px 16px;font-size:12px;color:#6b7280;border-bottom:1px solid #e5e7eb;">Inject problem severity</div>'+
-    levels.map(function(l){
-      return '<div class="w-row" onclick="confirmInject(\''+nodeId+'\',\''+l[0]+'\')">'+esc(l[1])+'</div>';
-    }).join("")+
-    '<div class="w-actions"><button onclick="removeInjectMenu()">Cancel</button></div>';
-  var rect=btn.getBoundingClientRect();
-  menu.style.left=rect.left+"px"; menu.style.top=(rect.bottom+4)+"px";
-  document.body.appendChild(menu);
-}
-
-function removeInjectMenu(){
-  var m=document.getElementById("inject-menu"); if(m) m.remove();
-}
-
-async function confirmInject(nodeId, severity){
-  removeInjectMenu();
-  var r=await fetch("/inject/"+nodeId,{method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({severity:severity})});
-  var d=await r.json();
-  await loadGraph();              // refresh severities for the whole graph
-  if(selectedNode===nodeId) selectNode(nodeId);  // refresh panel signals/relations
-  layoutGraph(); render();
-}
 
 function resetView(){ nodePositions={}; selectedNode=null; closePanel(); loadGraph(); }
