@@ -104,17 +104,19 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None) -> FastAPI:
             node.delta_accumulator = 0.0
         return {"assessments": assessments, "violations": violations}
 
-    @app.post("/builder/inject")
-    def builder_inject(body: dict):
-        """Set a data source's raw value to simulate a problem."""
-        node_id = body.get("node_id", "")
-        raw_value = body.get("raw_value")
+    @app.post("/builder/nodes/{node_id}/raw-values")
+    def set_raw_values(node_id: str, body: dict):
+        """Set raw field values on a leaf node to simulate data changes."""
         if node_id not in store.nodes:
-            return {"error": "node not found"}
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=404, content={"error": "node not found"})
         node = store.get_node(node_id)
-        if node.data_binding:
-            node.data_binding.raw_value = float(raw_value) if raw_value is not None else None
-        return {"node_id": node_id, "raw_value": raw_value}
+        if not node.data_binding:
+            return {"error": "not a leaf node"}
+        raw_values = body.get("raw_values", {})
+        for k, v in raw_values.items():
+            node.data_binding.raw_values[k] = float(v) if v is not None else None
+        return {"node_id": node_id, "raw_values": node.data_binding.raw_values}
 
     @app.get("/raw", response_class=HTMLResponse)
     def raw_graph():
@@ -141,21 +143,25 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None) -> FastAPI:
             node = store.get_node(nid)
             for cid in store.children(nid):
                 child = store.get_node(cid)
+                edge_obj = next((e for e in store._edges if e.src == nid and e.dst == cid), None)
                 edges.append({
                     "src": nid,
                     "dst": cid,
                     "src_title": node.title,
                     "dst_title": child.title,
                     "type": "decomposition",
+                    "weight": edge_obj.weight.value if edge_obj else "medium",
                 })
             for did in store.dependencies(nid):
                 dep = store.get_node(did) if did in store.nodes else None
+                edge_obj = next((e for e in store._edges if e.src == did and e.dst == nid), None)
                 edges.append({
                     "src": did,
                     "dst": nid,
                     "src_title": dep.title if dep else did,
                     "dst_title": node.title,
                     "type": "dependency",
+                    "weight": edge_obj.weight.value if edge_obj else "medium",
                 })
         return {"nodes": nodes, "edges": edges}
 
@@ -242,34 +248,47 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None) -> FastAPI:
         return {
             "id": node.id, "kind": node.kind.value, "title": node.title,
             "description": node.description,
-            "trigger_threshold": node.trigger_threshold,
             "delta_accumulator": node.delta_accumulator,
             "children": store.children(node_id),
             "parents": store.parents(node_id),
             "dependencies": store.dependencies(node_id),
             "dependents": store.dependents(node_id),
             "severity": node.current.llm_verdict.severity.value if node.current else None,
-            "threshold_rules": node.data_binding.threshold_rules if node.data_binding else [],
-            "raw_value": node.data_binding.raw_value if node.data_binding else None,
+            "field_rules": [fr.model_dump(mode="json") for fr in (node.data_binding.field_rules if node.data_binding else [])],
+            "raw_values": node.data_binding.raw_values if node.data_binding else {},
+            "inbound_signals": [s.model_dump(mode="json") for s in node.inbound_signals],
+            "outbound_signal": node.outbound_signal.model_dump(mode="json") if node.outbound_signal else None,
         }
 
     @app.post("/builder/nodes")
     def create_node(body: dict):
-        from .models import DataBinding, Sensitivity
+        from .models import DataBinding, Sensitivity, FieldRule
         nid = body.get("id", body.get("title", "untitled"))
         kind = NodeKind(body.get("kind", "task"))
         binding = None
         if kind == NodeKind.LEAF:
             adapter_id = body.get("adapter_id", "")
             query = body.get("query", "")
-            binding = DataBinding(adapter_id=adapter_id, query=query,
-                                  sensitivity=Sensitivity.INTERNAL)
+            field_rules_raw = body.get("field_rules", [])
+            field_rules = []
+            for fr in field_rules_raw:
+                field_rules.append(FieldRule(
+                    field=fr["field"],
+                    kind=fr.get("kind", "structured"),
+                    operator=fr.get("operator", "<"),
+                    expected=float(fr.get("expected", 0)),
+                    severity_on_breach=Severity(fr.get("severity_on_breach", "medium")),
+                ))
+            binding = DataBinding(
+                adapter_id=adapter_id, query=query,
+                sensitivity=Sensitivity.INTERNAL,
+                field_rules=field_rules,
+            )
             existing = store.find_duplicate_source(binding)
             if existing:
                 return {"id": existing, "deduped": True}
         node = Node(id=nid, kind=kind, title=body.get("title", nid),
                     description=body.get("description", ""),
-                    trigger_threshold=float(body.get("trigger_threshold", 25.0)),
                     data_binding=binding)
         store.add_node(node)
         return {"id": nid, "deduped": False}
@@ -285,9 +304,14 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None) -> FastAPI:
 
     @app.post("/builder/edges")
     def create_edge(body: dict):
+        weight_str = body.get("weight", "medium")
         try:
-            store.add_edge(body["src"], body["dst"], EdgeType(body["type"]))
-            return {"src": body["src"], "dst": body["dst"], "type": body["type"]}
+            weight = Severity(weight_str)
+        except ValueError:
+            weight = Severity.MEDIUM
+        try:
+            store.add_edge(body["src"], body["dst"], EdgeType(body["type"]), weight)
+            return {"src": body["src"], "dst": body["dst"], "type": body["type"], "weight": weight.value}
         except ValueError as exc:
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=400, content={"error": str(exc)})
@@ -314,12 +338,12 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None) -> FastAPI:
                 "id": nid, "kind": n.kind.value, "title": n.title,
                 "description": n.description,
                 "severity": n.current.llm_verdict.severity.value if n.current else None,
-                "trigger_threshold": n.trigger_threshold,
                 "delta_accumulator": n.delta_accumulator,
-                "threshold_rules": n.data_binding.threshold_rules if n.data_binding else [],
-                "raw_value": n.data_binding.raw_value if n.data_binding else None,
+                "field_rules": [fr.model_dump(mode="json") for fr in (n.data_binding.field_rules if n.data_binding else [])],
+                "raw_values": n.data_binding.raw_values if n.data_binding else {},
+                "outbound_signal": n.outbound_signal.model_dump(mode="json") if n.outbound_signal else None,
             })
-        edges = [{"src": e.src, "dst": e.dst, "type": e.type.value}
+        edges = [{"src": e.src, "dst": e.dst, "type": e.type.value, "weight": e.weight.value}
                  for e in store._edges]
         return {"nodes": nodes, "edges": edges}
 
