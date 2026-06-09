@@ -49,13 +49,12 @@ class SpyLLM:
 def test_assessment_is_a_single_batch_call():
     spy = SpyLLM()
     c = TestClient(build_app(seed_fn=load_supply_chain, llm=spy))
-    # First read triggers the (lazy) assessment.
-    g = c.get("/builder/graph").json()
+    g = c.post("/assess").json()
     assert spy.batch_calls == 1, f"expected exactly one batch call, got {spy.batch_calls}"
     # Every node got the batch-assigned severity.
     assert all(n["severity"] == "high" for n in g["nodes"])
-    # A second read does not re-assess.
-    c.get("/builder/graph")
+    # A second assessment with no change does not re-call the LLM.
+    c.post("/assess")
     assert spy.batch_calls == 1
 
 

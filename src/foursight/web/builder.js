@@ -77,6 +77,7 @@ function onWheel(e){
   updateViewBox();
 }
 
+var ROOT_ID=null;
 async function loadGraph(){
   var r=await fetch("/builder/graph"); var d=await r.json();
   d.nodes.forEach(function(n){graph.nodes[n.id]=n;});
@@ -84,7 +85,97 @@ async function loadGraph(){
   if(Object.keys(nodePositions).length===0){
     layoutGraph();
   }
+  try{ ROOT_ID=(await (await fetch("/root")).json()).node_id; }catch(e){}
+  renderLeftBar();
   render();
+}
+
+// ===== Tabs =====
+function switchTab(name){
+  document.querySelectorAll(".tab").forEach(function(t){t.classList.toggle("active", t.getAttribute("data-tab")===name);});
+  document.querySelectorAll(".tab-pane").forEach(function(p){p.classList.remove("active");});
+  document.getElementById("tab-"+name).classList.add("active");
+  var isBuilder=(name==="builder");
+  document.getElementById("btn-task").style.display=isBuilder?"":"none";
+  document.getElementById("btn-leaf").style.display=isBuilder?"":"none";
+  if(name==="builder"){ resizeSVG(); render(); }
+  else{ openReportAtRoot(); }
+}
+
+var SEVC={low:"#16a34a",medium:"#ca8a04",high:"#ea580c",critical:"#dc2626",none:"#94a3b8"};
+
+// ===== Left bar =====
+function renderLeftBar(){
+  var nodes=Object.values(graph.nodes);
+  var counts={low:0,medium:0,high:0,critical:0};
+  nodes.forEach(function(n){ if(n.severity&&counts[n.severity]!=null) counts[n.severity]++; });
+  document.getElementById("risk-dist").innerHTML=["low","medium","high","critical"].map(function(s){
+    return "<div class='risk-cell'><div class='n' style='color:"+SEVC[s]+"'>"+counts[s]+"</div><div class='l'>"+s+"</div></div>";
+  }).join("");
+  fillLbList("lb-program", nodes.filter(function(n){return n.id===ROOT_ID;}));
+  fillLbList("lb-tasks", nodes.filter(function(n){return n.kind==="task"&&n.id!==ROOT_ID;}));
+  fillLbList("lb-data", nodes.filter(function(n){return n.kind==="leaf";}));
+}
+function fillLbList(elId, items){
+  var el=document.getElementById(elId); if(!el) return;
+  el.innerHTML=items.map(function(n){
+    var c=SEVC[n.severity||"none"];
+    return "<div class='lb-item"+(selectedNode===n.id?" sel":"")+"' onclick=\"lbClick('"+n.id+"')\">"+
+      "<span class='lb-dot' style='background:"+c+"'></span><span class='t'>"+esc(n.title||n.id)+"</span></div>";
+  }).join("")||"<div class='hint' style='padding:4px 8px;'>none</div>";
+}
+function lbClick(nid){ switchTab('builder'); selectNode(nid); renderLeftBar(); }
+
+// ===== Report tab =====
+var reportPath=[];
+async function openReportAtRoot(){
+  if(!ROOT_ID){ try{ ROOT_ID=(await (await fetch("/root")).json()).node_id; }catch(e){} }
+  reportPath=ROOT_ID?[ROOT_ID]:[];
+  renderReport();
+}
+function reportNavigate(nid){
+  var idx=reportPath.indexOf(nid);
+  if(idx>=0) reportPath=reportPath.slice(0,idx+1); else reportPath.push(nid);
+  renderReport();
+}
+async function renderReport(){
+  var card=document.getElementById("report-card");
+  if(!reportPath.length){ card.innerHTML="<div class='rpt'><div class='rpt-empty'>No root found. Build a graph and run assessment.</div></div>"; return; }
+  var nid=reportPath[reportPath.length-1];
+  document.getElementById("report-breadcrumb").innerHTML=reportPath.map(function(id,i){
+    var last=(i===reportPath.length-1);
+    var title=(graph.nodes[id]&&graph.nodes[id].title)||id;
+    return (i>0?"<span class='sep'>&rsaquo;</span>":"")+
+      "<span class='crumb"+(last?" cur":"")+"'"+(last?"":" onclick=\"reportNavigate('"+id+"')\"")+">"+esc(title)+"</span>";
+  }).join("");
+  card.innerHTML="<div class='rpt'><div class='rpt-empty'>Loading...</div></div>";
+  var d=await (await fetch("/builder/nodes/"+nid)).json();
+  if(graph.nodes[nid]) graph.nodes[nid].severity=d.severity;
+  var sev=d.severity||"none";
+  var ctx="";
+  if(!d.query){ try{ ctx=(await (await fetch("/node/"+nid+"/context")).json()).summary; }catch(e){} }
+  var drivers=(d.inputs||[]).map(function(id){
+    var n=graph.nodes[id]||{}; var s=n.severity||"none";
+    return "<div class='driver' onclick=\"reportNavigate('"+id+"')\">"+
+      "<span class='dleft' style='background:"+SEVC[s]+"'></span>"+
+      "<span class='dtitle'>"+esc(n.title||id)+"</span>"+
+      "<span class='dsev' style='color:"+SEVC[s]+"'>"+s+"</span><span class='arrow'>&rsaquo;</span></div>";
+  }).join("");
+  var stats="";
+  var rv=d.raw_values||{}, rvk=Object.keys(rv);
+  if(rvk.length) stats+="<div class='rpt-stat'><div class='k'>Current value</div><div class='v'>"+rvk.map(function(k){return esc(k)+" = <b>"+esc(String(rv[k]))+"</b>";}).join("<br>")+"</div></div>";
+  if(d.field_rules&&d.field_rules.length) stats+="<div class='rpt-stat'><div class='k'>Threshold</div><div class='v'>"+d.field_rules.map(function(fr){
+    return esc(fr.field)+" "+esc(fr.operator||"")+" "+esc(String(fr.expected))+" &rarr; "+esc(fr.severity_on_breach);
+  }).join("<br>")+"</div></div>";
+  card.innerHTML="<div class='rpt'>"+
+    "<div class='rpt-head'><span class='rpt-title'>"+esc(d.title||nid)+"</span>"+
+      "<span class='badge kind'>"+esc(d.kind||"")+"</span>"+
+      "<span class='sev-pill' style='background:"+SEVC[sev]+"'>"+sev+"</span></div>"+
+    (d.description?"<div class='rpt-row'><div class='k'>Description</div><div class='v'>"+esc(d.description)+"</div></div>":"")+
+    (ctx?"<div class='rpt-row'><div class='k'>Context (vector + LLM)</div><div class='v'>"+esc(ctx)+"</div></div>":"")+
+    (stats?"<div class='rpt-row'><div class='rpt-grid'>"+stats+"</div></div>":"")+
+    "<div class='rpt-row'><div class='k'>Drivers (what feeds this node)</div>"+
+      (drivers||"<div class='rpt-empty'>No upstream drivers (leaf data source).</div>")+"</div></div>";
 }
 
 // --- Topological layout ---
@@ -714,6 +805,7 @@ async function runAssessment(){
     var d=await r.json();
     (d.nodes||[]).forEach(function(n){ if(graph.nodes[n.id]) graph.nodes[n.id].severity=n.severity; });
     clearAssessmentStale();
+    renderLeftBar();
     if(selectedNode) selectNode(selectedNode);   // refresh panel readings/signals
     layoutGraph(); render();
   }catch(e){ alert("Assessment failed: "+e); }

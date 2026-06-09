@@ -169,19 +169,10 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
         return "effect_score", {"low": 0.0, "medium": 30.0, "high": 60.0, "critical": 90.0}[sev.value]
 
     @app.get("/", response_class=HTMLResponse)
-    def index():
-        f = WEB / "index.html"
-        return f.read_text() if f.exists() else "<h1>4sight (web not built yet)</h1>"
-
-    @app.get("/graph", response_class=HTMLResponse)
-    def graph():
-        f = WEB / "graph.html"
-        return f.read_text() if f.exists() else "<h1>graph not built yet</h1>"
-
     @app.get("/builder", response_class=HTMLResponse)
-    def builder():
+    def index():
         f = WEB / "builder.html"
-        return f.read_text() if f.exists() else "<h1>builder not built yet</h1>"
+        return f.read_text() if f.exists() else "<h1>4sight (web not built yet)</h1>"
 
     @app.post("/builder/batch-assess")
     def builder_batch_assess(body: dict):
@@ -343,54 +334,6 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
             summarizer = context_llm or eng.llm
             node.context_summary = summarizer.summarize(node, chunks)
         return {"node_id": node_id, "summary": node.context_summary}
-
-    @app.get("/raw", response_class=HTMLResponse)
-    def raw_graph():
-        f = WEB / "raw.html"
-        return f.read_text() if f.exists() else "<h1>raw graph not built yet</h1>"
-
-    @app.get("/graph-raw")
-    def graph_raw(role: str = "reviewer"):
-        _ensure_assessed()
-        viewer = Viewer(id="anon", role=Role(role))
-        nodes = []
-        for nid in store.all_ids():
-            node = store.get_node(nid)
-            entry = {
-                "id": nid,
-                "title": node.title,
-                "kind": node.kind.value,
-                "severity": None,
-            }
-            if node.current:
-                entry["severity"] = node.current.llm_verdict.severity.value
-            nodes.append(entry)
-        edges = []
-        for nid in store.all_ids():
-            node = store.get_node(nid)
-            for cid in store.children(nid):
-                child = store.get_node(cid)
-                edge_obj = next((e for e in store._edges if e.src == nid and e.dst == cid), None)
-                edges.append({
-                    "src": nid,
-                    "dst": cid,
-                    "src_title": node.title,
-                    "dst_title": child.title,
-                    "type": "decomposition",
-                    "weight": edge_obj.weight.value if edge_obj else "medium",
-                })
-            for did in store.dependencies(nid):
-                dep = store.get_node(did) if did in store.nodes else None
-                edge_obj = next((e for e in store._edges if e.src == did and e.dst == nid), None)
-                edges.append({
-                    "src": did,
-                    "dst": nid,
-                    "src_title": dep.title if dep else did,
-                    "dst_title": node.title,
-                    "type": "dependency",
-                    "weight": edge_obj.weight.value if edge_obj else "medium",
-                })
-        return {"nodes": nodes, "edges": edges}
 
     @app.get("/graph-data")
     def graph_data(role: str = "reviewer"):
@@ -591,7 +534,6 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
 
     @app.get("/builder/graph")
     def get_builder_graph():
-        _ensure_assessed()
         nodes = []
         for nid in store.all_ids():
             n = store.get_node(nid)

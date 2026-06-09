@@ -2,83 +2,115 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>4sight -- Graph Builder</title>
-  <link rel="stylesheet" href="/static/builder.css?v=4">
+  <title>4sight</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/builder.css?v=5">
 </head>
 <body>
-  <div id="toolbar">
-    <button id="btn-task" onclick="startCreate('task')">+ Task</button>
-    <button id="btn-leaf" onclick="startCreate('leaf')">+ Data Source</button>
-    <span class="sep"></span>
-    <button class="primary" id="btn-assess" onclick="runAssessment()">Run Assessment</button>
-    <span id="assess-note" style="display:none;color:#b45309;font-size:12px;margin-left:8px;">values changed -- run assessment</span>
+  <div id="topbar">
+    <div class="brand"><span class="brand-mark"></span> 4sight</div>
+    <div class="tabs">
+      <button class="tab active" data-tab="builder" onclick="switchTab('builder')">Builder</button>
+      <button class="tab" data-tab="report" onclick="switchTab('report')">Report</button>
+    </div>
+    <div class="tools">
+      <button id="btn-task" onclick="startCreate('task')">+ Task</button>
+      <button id="btn-leaf" onclick="startCreate('leaf')">+ Data Source</button>
+      <button class="primary" id="btn-assess" onclick="runAssessment()">Run Assessment</button>
+      <span id="assess-note">values changed -- run assessment</span>
+    </div>
   </div>
-  <div id="assess-status">
-    <div class="spinner"></div>
-    <span>Running assessment -- the LLM is evaluating the graph...</span>
-  </div>
-  <div id="main-area">
-    <svg id="svg-canvas"></svg>
-    <div id="panel-resizer" title="Drag to resize"></div>
-    <div id="node-panel">
-      <h3 id="panel-title">New Node</h3>
-      <label>Name</label>
-      <input id="panel-name" placeholder="Task name">
-      <label>Kind</label>
-      <select id="panel-kind" onchange="onKindChange()">
-        <option value="task">Task</option>
-        <option value="leaf">Data Source (leaf)</option>
-      </select>
-      <div id="panel-leaf-fields" style="display:none;">
-        <label>Adapter ID</label>
-        <input id="panel-adapter" placeholder="csv">
-        <label>Query</label>
-        <textarea id="panel-query" placeholder="SQL or file path"></textarea>
-        <button onclick="testQuery()" style="width:auto;padding:3px 10px;font-size:11px;background:#0f766e;color:#fff;border:none;border-radius:4px;cursor:pointer;">Run query (test)</button>
-        <div id="query-test-result" style="font-size:11px;margin-top:4px;"></div>
-        <label>Current readings (editable -- changing a value injects a problem)</label>
-        <div id="panel-readings" style="font-size:12px;color:#1f2937;"></div>
-      </div>
-      <label>Description</label>
-      <textarea id="panel-desc" placeholder="Describe this task"></textarea>
+  <div id="assess-status"><div class="spinner"></div><span>Running assessment -- the LLM is evaluating the graph...</span></div>
 
-      <!-- Field Rules (leaf nodes only) -->
-      <div id="panel-field-rules-section" style="display:none;">
-        <label style="display:flex;justify-content:space-between;align-items:center;">
-          Field Rules
-          <button id="btn-add-field-rule" onclick="addFieldRule()" style="width:auto;padding:2px 8px;font-size:11px;background:#1d4ed8;color:#fff;border:none;border-radius:4px;cursor:pointer;">+ Add</button>
-        </label>
-        <div id="panel-field-rules"></div>
+  <!-- ===================== BUILDER TAB ===================== -->
+  <div id="tab-builder" class="tab-pane active">
+    <aside id="left-bar">
+      <div class="lb-block">
+        <div class="lb-title">Risk Distribution</div>
+        <div id="risk-dist" class="risk-dist"></div>
       </div>
+      <div class="lb-block">
+        <div class="lb-title">Program</div>
+        <div id="lb-program" class="lb-list"></div>
+      </div>
+      <div class="lb-block">
+        <div class="lb-title">Tasks</div>
+        <div id="lb-tasks" class="lb-list"></div>
+      </div>
+      <div class="lb-block">
+        <div class="lb-title">Data Sources</div>
+        <div id="lb-data" class="lb-list"></div>
+      </div>
+    </aside>
 
-      <!-- Inbound Signals (task nodes, read-only) -->
-      <div id="panel-signals" style="display:none;">
-        <label>Inbound Signals</label>
-        <div id="panel-inbound-signals"></div>
-        <label>Outbound Signal</label>
-        <div id="panel-outbound-signal" style="font-size:12px;color:#6b7280;"></div>
-      </div>
+    <div id="main-area">
+      <svg id="svg-canvas"></svg>
+      <div id="panel-resizer" title="Drag to resize"></div>
+      <div id="node-panel">
+        <h3 id="panel-title">New Node</h3>
+        <label>Name</label>
+        <input id="panel-name" placeholder="Task name">
+        <label>Kind</label>
+        <select id="panel-kind" onchange="onKindChange()">
+          <option value="task">Task</option>
+          <option value="leaf">Data Source (leaf)</option>
+        </select>
+        <div id="panel-leaf-fields" style="display:none;">
+          <label>Adapter ID</label>
+          <input id="panel-adapter" placeholder="csv">
+          <label>Query</label>
+          <textarea id="panel-query" placeholder="SQL or file path"></textarea>
+          <button onclick="testQuery()" class="mini-btn teal">Run query (test)</button>
+          <div id="query-test-result" class="hint"></div>
+          <label>Current readings (editable -- changing a value injects a problem)</label>
+          <div id="panel-readings"></div>
+        </div>
+        <label>Description</label>
+        <textarea id="panel-desc" placeholder="Describe this task"></textarea>
 
-      <!-- Chroma-grounded LLM context summary (unstructured sources + tasks only) -->
-      <div id="panel-context-section" style="display:none;">
-        <label>Context (vector search + LLM)</label>
-        <div id="panel-context" style="font-size:12px;color:#6b7280;font-style:italic;"></div>
-      </div>
+        <div id="panel-field-rules-section" style="display:none;">
+          <label style="display:flex;justify-content:space-between;align-items:center;">
+            Field Rules
+            <button id="btn-add-field-rule" onclick="addFieldRule()" class="mini-btn blue">+ Add</button>
+          </label>
+          <div id="panel-field-rules"></div>
+        </div>
 
-      <div style="display:flex;gap:8px;margin-top:8px;">
-        <button onclick="saveNodePanel()" style="flex:1;background:#1a3a5c;color:#e6e6e6;border:1px solid #2a5a8c;border-radius:6px;padding:8px;cursor:pointer;">Save</button>
-        <button onclick="closePanel()" style="flex:1;background:#1a1d24;color:#e6e6e6;border:1px solid #2a2e36;border-radius:6px;padding:8px;cursor:pointer;">Cancel</button>
-      </div>
-      <button id="btn-delete" onclick="deleteSelectedNode()" style="display:none;width:100%;margin-top:4px;background:#4a1018;color:#ff6b6b;border:1px solid #6b1a1a;border-radius:6px;padding:8px;cursor:pointer;">Delete node</button>
-      <div id="panel-relations" style="margin-top:12px;display:none;">
-        <label>Depends on me</label>
-        <div class="rel-list" id="panel-dependents"></div>
-        <label>I depend on</label>
-        <div class="rel-list" id="panel-dependencies"></div>
+        <div id="panel-signals" style="display:none;">
+          <label>Inbound Signals</label>
+          <div id="panel-inbound-signals"></div>
+          <label>Outbound Signal</label>
+          <div id="panel-outbound-signal" class="hint"></div>
+        </div>
+
+        <div id="panel-context-section" style="display:none;">
+          <label>Context (vector search + LLM)</label>
+          <div id="panel-context" class="hint italic"></div>
+        </div>
+
+        <div style="display:flex;gap:8px;margin-top:8px;">
+          <button onclick="saveNodePanel()" class="btn-save">Save</button>
+          <button onclick="closePanel()" class="btn-cancel">Cancel</button>
+        </div>
+        <button id="btn-delete" onclick="deleteSelectedNode()" class="btn-delete">Delete node</button>
+        <div id="panel-relations" style="margin-top:12px;display:none;">
+          <label>Depends on me</label>
+          <div class="rel-list" id="panel-dependents"></div>
+          <label>I depend on</label>
+          <div class="rel-list" id="panel-dependencies"></div>
+        </div>
       </div>
     </div>
   </div>
-  <script src="/static/builder.js?v=4"></script>
+
+  <!-- ===================== REPORT TAB ===================== -->
+  <div id="tab-report" class="tab-pane">
+    <div id="report-breadcrumb"></div>
+    <div id="report-card"></div>
+  </div>
+
+  <script src="/static/builder.js?v=5"></script>
   <script>init();</script>
 </body>
 </html>
