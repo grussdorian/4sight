@@ -1,8 +1,81 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
-from .models import Node, NodeKind, Assessment, Severity
+from .models import Node, NodeKind, Assessment, Severity, FieldRule
 
 RULE_VERSION = "ops-risk-v2"
+
+
+def generic_effect_score_rules() -> list[FieldRule]:
+    """The default field-rule ladder every demo leaf carries. The
+    `simulate-change` / `/raw-values` path injects these synthetic fields, so
+    keeping them on every leaf is what makes the demo fire regardless of the
+    leaf's domain-specific rules."""
+    return [
+        FieldRule(field="effect_score", kind="structured", operator=">=",
+                  expected=75.0, severity_on_breach=Severity.CRITICAL),
+        FieldRule(field="effect_score", kind="structured", operator=">=",
+                  expected=50.0, severity_on_breach=Severity.HIGH),
+        FieldRule(field="effect_score", kind="structured", operator=">=",
+                  expected=25.0, severity_on_breach=Severity.MEDIUM),
+        FieldRule(field="capacity_drop_pct", kind="structured", operator=">",
+                  expected=50.0, severity_on_breach=Severity.HIGH),
+        FieldRule(field="single_owner", kind="structured", operator="==",
+                  expected=1.0, severity_on_breach=Severity.CRITICAL),
+        FieldRule(field="data_age_h", kind="structured", operator=">",
+                  expected=120.0, severity_on_breach=Severity.MEDIUM),
+    ]
+
+
+def graded_field_rules(field: str, direction: str, bands: dict) -> list[FieldRule]:
+    """Build a graded set of FieldRules on one real domain field.
+
+    direction "low"  -> lower is worse, operator "<" (breach when value < threshold)
+    direction "high" -> higher is worse, operator ">" (breach when value > threshold)
+    bands maps Severity -> threshold value.
+    """
+    op = "<" if direction == "low" else ">"
+    return [
+        FieldRule(field=field, kind="structured", operator=op,
+                  expected=float(threshold), severity_on_breach=sev)
+        for sev, threshold in bands.items()
+    ]
+
+
+def translate_threshold_rules(raw_rules: list[dict]) -> list[FieldRule]:
+    """Translate the legacy `threshold_rules` topology format
+    ({field, operator, value}) into `FieldRule`s so they are honored rather
+    than silently dropped on load. A threshold breach maps to HIGH severity."""
+    translated: list[FieldRule] = []
+    for tr in raw_rules:
+        translated.append(FieldRule(
+            field=tr["field"], kind="structured",
+            operator=tr.get("operator", "<"),
+            expected=float(tr.get("value", tr.get("expected", 0))),
+            severity_on_breach=Severity(tr.get("severity_on_breach", "high")),
+        ))
+    return translated
+
+
+def leaf_field_rules_from_json(node_json: dict) -> list[FieldRule]:
+    """Build a leaf's field rules from a topology node.
+
+    Precedence: explicit `field_rules` win outright. Otherwise translate any
+    legacy `threshold_rules` and always append the generic effect_score ladder
+    so the simulate-change demo still produces signals.
+    """
+    explicit = node_json.get("field_rules", [])
+    if explicit:
+        return [
+            FieldRule(
+                field=fr["field"],
+                kind=fr.get("kind", "structured"),
+                operator=fr.get("operator", "<"),
+                expected=float(fr.get("expected", 0)),
+                severity_on_breach=Severity(fr.get("severity_on_breach", "medium")),
+            )
+            for fr in explicit
+        ]
+    return translate_threshold_rules(node_json.get("threshold_rules", [])) + generic_effect_score_rules()
 
 
 @dataclass

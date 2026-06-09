@@ -1,7 +1,7 @@
 from __future__ import annotations
 import os
 from typing import Protocol
-from .models import Node, LLMVerdict, Grounding, DriverBullet, severity_from_score
+from .models import Node, LLMVerdict, Grounding, DriverBullet, Severity, severity_from_score
 
 
 class LLM(Protocol):
@@ -12,7 +12,17 @@ class LLM(Protocol):
 
     def generate_overall(self, node: Node, drivers: list[DriverBullet]) -> str: ...
 
+    def synthesize(self, node: Node, contributions: list[dict]) -> LLMVerdict: ...
+
+    def summarize(self, node: Node, chunks: list[str]) -> str: ...
+
     def batch_assess(self, system: str, prompt: str) -> str: ...
+
+
+# Edge weight -> how heavily a non-leaf node weighs each upstream signal.
+# MEDIUM is neutral (1.0) so all-MEDIUM graphs behave exactly like max();
+# CRITICAL/HIGH amplify a dominant signal, LOW discounts a weak coupling.
+WEIGHT_FACTOR = {"critical": 1.25, "high": 1.1, "medium": 1.0, "low": 0.5}
 
 
 class FakeLLM:
@@ -27,6 +37,30 @@ class FakeLLM:
         return LLMVerdict(final_score=score, severity=severity_from_score(score),
                           rationale=rationale, adjusted=adjusted, model=self.model)
 
+    def synthesize(self, node, contributions) -> LLMVerdict:
+        """Weight-aware synthesis of upstream signals into one verdict.
+
+        Each contribution is {title, score, severity, weight, cause}. The edge
+        weight scales each signal; the dominant (highest weighted) score drives
+        the result, so edge importance actually changes the outcome.
+        """
+        if not contributions:
+            return LLMVerdict(final_score=0.0, severity=Severity.LOW,
+                              rationale="No upstream signals.", model=self.model)
+
+        def effective(c):
+            return min(100.0, c["score"] * WEIGHT_FACTOR.get(c.get("weight", "medium"), 1.0))
+
+        dominant = max(contributions, key=effective)
+        final = effective(dominant)
+        rationale = (
+            f"Synthesized {len(contributions)} upstream signal(s); dominant driver "
+            f"{dominant['title']} (weight {dominant.get('weight', 'medium')}, "
+            f"score {dominant['score']:.0f})."
+        )
+        return LLMVerdict(final_score=final, severity=severity_from_score(final),
+                          rationale=rationale, adjusted=True, model=self.model)
+
     def generate_overall(self, node, drivers) -> str:
         sev = node.current.llm_verdict.severity.value if node.current else "unknown"
         if not drivers:
@@ -35,6 +69,12 @@ class FakeLLM:
         if first.node_id == node.id:
             return f"{node.title} is at {sev} risk. {first.line}."
         return f"{node.title} is at {sev} risk. Primary driver: {first.line}."
+
+    def summarize(self, node, chunks) -> str:
+        n = len(chunks)
+        if not chunks:
+            return f"No grounding context found for {node.title}."
+        return f"Context summary for {node.title}: {n} reference(s) reviewed."
 
     def batch_assess(self, system: str, prompt: str) -> str:
         import json, re
@@ -127,6 +167,73 @@ class DeepSeekLLM:
             ),
             messages=[{"role": "user", "content": (
                 f"Write a risk summary for '{node.title}'. Top drivers:\n{lines}"
+            )}],
+        )
+        return self._extract_text(resp).strip()
+
+    def synthesize(self, node, contributions) -> LLMVerdict:
+        import json
+        if not contributions:
+            return LLMVerdict(final_score=0.0, severity=Severity.LOW,
+                              rationale="No upstream signals.", model=self.model)
+        signal_lines = "\n".join(
+            f"- {c['title']} [weight: {c.get('weight', 'medium')}, score: {c['score']:.0f}, "
+            f"severity: {c['severity']}]\n  cause: {c['cause']}"
+            for c in contributions
+        )
+        prompt = (
+            f"Task: {node.title}\n"
+            f"Description: {node.description or 'No description'}\n\n"
+            f"Upstream signals:\n{signal_lines}\n\n"
+            "Synthesize these into a single risk assessment. Weight tags tell you how "
+            "seriously to treat each signal. If a cause is redacted, rely on the score "
+            "and severity alone. Consider compounding effects -- multiple moderate "
+            "signals may compound into a higher risk than any individually.\n\n"
+            'Reply with JSON only: {"score": <number 0-100>, '
+            '"severity": "low"|"medium"|"high"|"critical", '
+            '"cause": "<2-3 sentence synthesis>"}'
+        )
+        resp = self._client.messages.create(
+            model=self.model,
+            max_tokens=2048,
+            thinking={"type": "enabled", "budget_tokens": 8000},
+            system=(
+                "You are a risk synthesis engine. You receive upstream signals from a "
+                "task's dependencies, each arriving through an edge with a weight tag "
+                "indicating how important that connection is. Synthesize them into a "
+                "single risk assessment."
+            ),
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw = self._extract_text(resp)
+        data = json.loads(raw)
+        score = float(data["score"])
+        sev_str = data.get("severity", "")
+        sev = Severity(sev_str) if sev_str in [s.value for s in Severity] else severity_from_score(score)
+        return LLMVerdict(final_score=score, severity=sev,
+                          rationale=data.get("cause", ""), adjusted=True,
+                          model=self.model, raw_response=raw)
+
+    def summarize(self, node, chunks) -> str:
+        if not chunks:
+            return f"No grounding context found for {node.title}."
+        context = "\n\n".join(f"- {c}" for c in chunks)
+        resp = self._client.messages.create(
+            model=self.model,
+            max_tokens=512,
+            thinking={"type": "enabled", "budget_tokens": 4000},
+            system=(
+                "You summarize operational context for a semiconductor fab risk "
+                "dashboard. Given retrieved policy/context excerpts for a node, "
+                "write 1-2 sentences describing the relevant context and what to "
+                "watch. Use only the excerpts; never invent specifics, names, or "
+                "numbers not present in them."
+            ),
+            messages=[{"role": "user", "content": (
+                f"Node: {node.title}\n"
+                f"Description: {node.description or 'none'}\n\n"
+                f"Retrieved context:\n{context}\n\n"
+                "Write the 1-2 sentence context summary."
             )}],
         )
         return self._extract_text(resp).strip()

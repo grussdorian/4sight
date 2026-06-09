@@ -9,7 +9,12 @@ from .models import ChangeEvent, Sensitivity, Viewer, Role, Node, NodeKind, Edge
 WEB = Path(__file__).parent / "web"
 
 
-def build_app(seed_fn=None, get_report_fn=None, trace_fn=None) -> FastAPI:
+def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
+              db_path=None, llm=None, vector=None, context_llm=None) -> FastAPI:
+    import sqlite3
+    from .db import init_db, save_graph, load_graph, seed_metrics, read_metrics, set_metric
+    from .triggers import TriggerEngine
+    from .poll import PollService
     if seed_fn is None:
         from .seed import build_seed as seed_fn
     if get_report_fn is None:
@@ -17,7 +22,44 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None) -> FastAPI:
     if trace_fn is None:
         from .reports import trace_to_source as trace_fn
 
-    store, eng, _ = seed_fn()
+    conn = sqlite3.connect(db_path or ":memory:", check_same_thread=False)
+    init_db(conn)
+    persist = db_path is not None
+    has_persisted = persist and conn.execute("SELECT COUNT(*) FROM nodes").fetchone()[0] > 0
+
+    if has_persisted:
+        # Restore graph structure from SQLite (a prior session saved it), then
+        # rebuild the ephemeral Chroma index, reseed/reload operational data,
+        # and re-run a full assessment.
+        from .reports import generate_report
+        from .propagation import Engine
+        from .vector_store import FakeVector
+        from .llm import FakeLLM
+        from .supply_chain_fixture import metric_baselines, parse_supply_chain
+        store = load_graph(conn)
+        _llm = llm or FakeLLM()
+        _vector = vector or FakeVector()
+        for doc_id, text in parse_supply_chain().policy_docs:
+            _vector.add(doc_id, text)
+        seed_metrics(conn, metric_baselines())
+        for nid in store.all_ids():
+            node = store.get_node(nid)
+            if node.data_binding:
+                node.data_binding.raw_values.update(read_metrics(conn, nid))
+        eng = Engine(store, _llm, _vector, generate_report)
+        eng.run_full()
+    else:
+        store, eng, _ = seed_fn(llm=llm, vector=vector, conn=conn)
+        if persist:
+            save_graph(store, conn)
+
+    triggers = TriggerEngine(store)
+    poller = PollService(store, conn, eng, triggers)
+
+    def _persist():
+        if persist:
+            save_graph(store, conn)
+
     app = FastAPI(title="4sight")
     app.state.sockets = []
     if WEB.exists():
@@ -31,6 +73,37 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None) -> FastAPI:
             except Exception:
                 pass
     eng.listeners.append(_broadcast)
+
+    def _band_value(node, severity_str):
+        """Pick a (field, value) that drives `node`'s real structured field into
+        the given severity band. LOW resets to a healthy value. Falls back to the
+        generic effect_score ladder if the real field has no rule for the level."""
+        from .models import Severity as Sev
+        GENERIC = {"effect_score", "capacity_drop_pct", "single_owner", "data_age_h"}
+        binding = node.data_binding
+        real = [r for r in binding.field_rules
+                if r.kind == "structured" and r.field not in GENERIC]
+        try:
+            sev = Sev(severity_str)
+        except ValueError:
+            sev = Sev.HIGH
+        if real:
+            field = real[0].field
+            on_field = [r for r in real if r.field == field]
+            op = on_field[0].operator
+            by_sev = {r.severity_on_breach: r.expected for r in on_field}
+            if op == "<":  # lower is worse
+                if sev == Sev.LOW:
+                    return field, max(by_sev.values()) + 20
+                if sev in by_sev:
+                    return field, by_sev[sev] - 5
+            else:          # higher is worse
+                if sev == Sev.LOW:
+                    return field, min(by_sev.values()) - 20
+                if sev in by_sev:
+                    return field, by_sev[sev] + 5
+        # Fallback: generic effect_score ladder (>=25 MEDIUM, >=50 HIGH, >=75 CRITICAL)
+        return "effect_score", {"low": 0.0, "medium": 30.0, "high": 60.0, "critical": 90.0}[sev.value]
 
     @app.get("/", response_class=HTMLResponse)
     def index():
@@ -49,32 +122,22 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None) -> FastAPI:
 
     @app.post("/builder/batch-assess")
     def builder_batch_assess(body: dict):
-        from .flatten import FlattenEngine
+        from .flatten import FlattenEngine, assessment_from_batch
         from .llm import DeepSeekLLM, FakeLLM
+        from .rules import score_leaf
         mode = body.get("mode", "full")
 
-        # Rule-based pre-check: evaluate threshold_rules on leaf data sources
+        # Rule-based pre-check: evaluate field rules on leaf data sources.
         violations = []
         for nid in store.all_ids():
             node = store.get_node(nid)
-            if node.data_binding and node.data_binding.threshold_rules:
-                for rule in node.data_binding.threshold_rules:
-                    raw_val = node.data_binding.raw_value
-                    if raw_val is None:
-                        continue
-                    field = rule.get("field", "")
-                    op = rule.get("operator", "<")
-                    threshold = float(rule.get("value", 0))
-                    if op == "<" and raw_val < threshold:
-                        violations.append(
-                            f"VIOLATION: {node.title} ({field}={raw_val}) "
-                            f"is below threshold {threshold}"
-                        )
-                    elif op == ">" and raw_val > threshold:
-                        violations.append(
-                            f"VIOLATION: {node.title} ({field}={raw_val}) "
-                            f"exceeds threshold {threshold}"
-                        )
+            if node.data_binding and node.data_binding.field_rules:
+                result = score_leaf(node)
+                for b in result.inputs.get("breached", []):
+                    violations.append(
+                        f"VIOLATION: {node.title} ({b['field']}={b['value']} "
+                        f"{b['operator']} {b['expected']}) -> {b['severity']}"
+                    )
 
         flatten = FlattenEngine(store)
         try:
@@ -98,10 +161,16 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None) -> FastAPI:
         except Exception:
             raw = FakeLLM().batch_assess(system, messages[0]["content"])
             assessments = flatten.parse_batch_response(raw)
-        for a in assessments:
-            node = store.get_node(a["node_id"])
-            node.current = a
+        for entry in assessments:
+            node = store.get_node(entry["node_id"])
+            node.current = assessment_from_batch(node, entry)
+            node.history.append(node.current.version)
+            node.outbound_signal = node.current.signal
             node.delta_accumulator = 0.0
+        for entry in assessments:
+            node = store.get_node(entry["node_id"])
+            eng.report_fn(node, store, llm)
+        _persist()
         return {"assessments": assessments, "violations": violations}
 
     @app.post("/builder/nodes/{node_id}/raw-values")
@@ -116,7 +185,49 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None) -> FastAPI:
         raw_values = body.get("raw_values", {})
         for k, v in raw_values.items():
             node.data_binding.raw_values[k] = float(v) if v is not None else None
+        _persist()
         return {"node_id": node_id, "raw_values": node.data_binding.raw_values}
+
+    @app.post("/inject/{node_id}")
+    def inject(node_id: str, body: dict):
+        """Inject a problem at a given severity. Writes a value into the leaf's
+        real SQL metric so the next poll drives it into that severity band, then
+        polls + re-assesses the influence cone immediately. severity=low resets."""
+        if node_id not in store.nodes:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=404, content={"error": "node not found"})
+        node = store.get_node(node_id)
+        if not node.data_binding:
+            return {"error": "not a leaf node"}
+        severity = body.get("severity", "high")
+        field, value = _band_value(node, severity)
+        set_metric(conn, node_id, field, float(value))
+        changed = poller.poll([node_id])
+        _persist()
+        return {"node_id": node_id, "field": field, "value": value,
+                "severity": severity, "changed": changed}
+
+    @app.post("/poll")
+    def poll_sources(body: dict):
+        node_ids = body.get("node_ids")
+        changed = poller.poll(node_ids)
+        _persist()
+        return {"changed": changed}
+
+    @app.get("/node/{node_id}/context")
+    def node_context(node_id: str):
+        """Lazily generate (and cache) an LLM context summary grounded in a
+        Chroma vector search over the policy/context docs."""
+        if node_id not in store.nodes:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=404, content={"error": "not found"})
+        node = store.get_node(node_id)
+        if not node.context_summary:
+            query = f"{node.title} {node.description}".strip()
+            chunks = eng.vector.query_texts(query, k=3)
+            summarizer = context_llm or eng.llm
+            node.context_summary = summarizer.summarize(node, chunks)
+        return {"node_id": node_id, "summary": node.context_summary}
 
     @app.get("/raw", response_class=HTMLResponse)
     def raw_graph():
@@ -225,7 +336,9 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None) -> FastAPI:
                                  after={"effect_score": effect_score}, at=now,
                                  sensitivity=Sensitivity.INTERNAL)
         eng.on_data_change(node_id, change)
-        return {"changed": eng.fire_node(node_id)}
+        changed = eng.fire_node(node_id)
+        _persist()
+        return {"changed": changed}
 
     @app.websocket("/ws")
     async def ws(socket: WebSocket):
@@ -253,6 +366,12 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None) -> FastAPI:
             "parents": store.parents(node_id),
             "dependencies": store.dependencies(node_id),
             "dependents": store.dependents(node_id),
+            # Direction-correct relationships based on the influence graph:
+            # inputs = what flows into this node (what it depends on);
+            # consumers = what this node flows into (what depends on it).
+            "inputs": store.influence_predecessors(node_id),
+            "consumers": store.influence_successors(node_id),
+            "context_summary": node.context_summary,
             "severity": node.current.llm_verdict.severity.value if node.current else None,
             "field_rules": [fr.model_dump(mode="json") for fr in (node.data_binding.field_rules if node.data_binding else [])],
             "raw_values": node.data_binding.raw_values if node.data_binding else {},
@@ -291,6 +410,7 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None) -> FastAPI:
                     description=body.get("description", ""),
                     data_binding=binding)
         store.add_node(node)
+        _persist()
         return {"id": nid, "deduped": False}
 
     @app.delete("/builder/nodes/{node_id}")
@@ -300,6 +420,7 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None) -> FastAPI:
                            if e.src != node_id and e.dst != node_id]
             store._infl.remove_node(node_id)
             del store.nodes[node_id]
+        _persist()
         return {"deleted": node_id}
 
     @app.post("/builder/edges")
@@ -311,6 +432,7 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None) -> FastAPI:
             weight = Severity.MEDIUM
         try:
             store.add_edge(body["src"], body["dst"], EdgeType(body["type"]), weight)
+            _persist()
             return {"src": body["src"], "dst": body["dst"], "type": body["type"], "weight": weight.value}
         except ValueError as exc:
             from fastapi.responses import JSONResponse
@@ -327,6 +449,7 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None) -> FastAPI:
             u, v = body["src"], body["dst"]
         if store._infl.has_edge(u, v):
             store._infl.remove_edge(u, v)
+        _persist()
         return {"deleted": True}
 
     @app.get("/builder/graph")

@@ -92,3 +92,8 @@ def test_node_has_signal_fields():
 def test_node_no_trigger_threshold():
     n = Node(id="t1", kind=NodeKind.TASK, title="Task 1")
     assert not hasattr(n, "trigger_threshold")
+
+
+def test_node_context_summary_default():
+    n = Node(id="t", kind=NodeKind.TASK, title="T")
+    assert n.context_summary == ""

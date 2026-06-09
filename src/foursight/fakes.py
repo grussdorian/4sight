@@ -53,6 +53,24 @@ class FakeStore:
     def all_ids(self):
         return list(self.nodes.keys())
 
+    def influence_predecessors(self, nid):
+        out = []
+        for e in self._edges:
+            if e.type.value == "decomposition" and e.src == nid:
+                out.append(e.dst)
+            elif e.type.value == "dependency" and e.dst == nid:
+                out.append(e.src)
+        return out
+
+    def influence_successors(self, nid):
+        out = []
+        for e in self._edges:
+            if e.type.value == "decomposition" and e.dst == nid:
+                out.append(e.src)
+            elif e.type.value == "dependency" and e.src == nid:
+                out.append(e.dst)
+        return out
+
     def topo_order(self, subset):
         return sorted(subset)
 
@@ -99,7 +117,7 @@ class FakeEngine:
         return changed
 
 
-def fake_seed(llm=None, vector=None):
+def fake_seed(llm=None, vector=None, conn=None):
     store = FakeStore()
     return store, FakeEngine(store), {}
 

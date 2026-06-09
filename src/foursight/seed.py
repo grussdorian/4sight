@@ -31,7 +31,7 @@ def _leaf(s, nid, title, sens=Sensitivity.INTERNAL):
                     ), raw={}))
 
 
-def build_seed(llm=None, vector=None):
+def build_seed(llm=None, vector=None, conn=None):
     from .llm import FakeLLM
     from .vector_store import FakeVector
     s = GraphStore()
@@ -53,7 +53,7 @@ def build_seed(llm=None, vector=None):
     return s, eng, {}
 
 
-def load_company(path=None, llm=None, vector=None):
+def load_company(path=None, llm=None, vector=None, conn=None):
     from .company_fixture import parse_company, FIXTURES
     from .vector_store import FakeVector
     from .llm import FakeLLM
@@ -71,8 +71,8 @@ def load_company(path=None, llm=None, vector=None):
     return s, eng, {}
 
 
-def load_supply_chain(path=None, llm=None, vector=None):
-    from .supply_chain_fixture import parse_supply_chain, FIXTURES
+def load_supply_chain(path=None, llm=None, vector=None, conn=None):
+    from .supply_chain_fixture import parse_supply_chain, metric_baselines, FIXTURES
     from .vector_store import FakeVector
     from .llm import FakeLLM
     spec = parse_supply_chain(path or FIXTURES)
@@ -84,6 +84,15 @@ def load_supply_chain(path=None, llm=None, vector=None):
     vector = vector or FakeVector()
     for doc_id, text in spec.policy_docs:
         vector.add(doc_id, text)
+    if conn is not None:
+        # Seed the operational data tables and load each leaf's raw values from
+        # SQL so the initial assessment reflects real (healthy) polled data.
+        from .db import seed_metrics, read_metrics
+        seed_metrics(conn, metric_baselines())
+        for nid in s.all_ids():
+            node = s.get_node(nid)
+            if node.data_binding:
+                node.data_binding.raw_values.update(read_metrics(conn, nid))
     eng = Engine(s, llm or FakeLLM(), vector, generate_report)
     eng.run_full()
     return s, eng, {}

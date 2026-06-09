@@ -164,12 +164,10 @@ function onMouseUp(e){
   if(portDrag){
     var snap=findSnapNode(e.clientX,e.clientY);
     if(snap&&snap!==portDrag.from){
-      var fromNode=graph.nodes[portDrag.from];
-      if(fromNode&&fromNode.kind==="leaf"){
-        addEdge(portDrag.from, snap);
-      }else{
-        addEdge(portDrag.from, snap);
-      }
+      // The node you drag FROM is always the edge source. For a leaf (data
+      // source) that means data flows leaf -> consumer; for a task it means
+      // task -> target. Same direction either way.
+      addEdge(portDrag.from, snap);
     }
     if(portLine){portLine.remove();portLine=null;}
     portDrag=null;svgEl.classList.remove("dragging");render();
@@ -536,6 +534,9 @@ function selectNode(nid){
   document.getElementById("panel-kind").value=n.kind||"task";
   document.getElementById("panel-relations").style.display="block";
   document.getElementById("btn-delete").style.display="block";
+  // Inject Problem is only meaningful on a leaf data source.
+  var injectBtn=document.getElementById("btn-inject");
+  if(injectBtn) injectBtn.disabled=(n.kind!=="leaf");
   onKindChange();
   fetch("/builder/nodes/"+nid).then(function(r){return r.json();}).then(function(d){
     n.description=d.description||n.description||"";
@@ -546,12 +547,10 @@ function selectNode(nid){
     document.getElementById("panel-desc").value=n.description||"";
     renderFieldRules(d.field_rules||[]);
     renderSignals(d.inbound_signals||[], d.outbound_signal);
-    var seenI={}, seenD={};
-    var iDepend=[], depOnMe=[];
-    (d.children||[]).forEach(function(c){if(!seenI[c]){seenI[c]=true;iDepend.push({id:c});}});
-    (d.dependents||[]).forEach(function(c){if(!seenI[c]){seenI[c]=true;iDepend.push({id:c});}});
-    (d.parents||[]).forEach(function(p){if(!seenD[p]){seenD[p]=true;depOnMe.push({id:p});}});
-    (d.dependencies||[]).forEach(function(p){if(!seenD[p]){seenD[p]=true;depOnMe.push({id:p});}});
+    // Direction-correct: "I depend on" = inputs (what flows into this node);
+    // "Depends on me" = consumers (what this node flows into).
+    var iDepend=(d.inputs||[]).map(function(id){return {id:id};});
+    var depOnMe=(d.consumers||[]).map(function(id){return {id:id};});
     var titleFor=function(nid){return (graph.nodes[nid]&&graph.nodes[nid].title)||nid;};
     document.getElementById("panel-dependencies").innerHTML=iDepend.map(function(r){
       return "<div class='rel-item' style='cursor:pointer;' onclick='drillToNode(\""+r.id+"\")'>"+esc(titleFor(r.id))+"</div>";
@@ -559,6 +558,7 @@ function selectNode(nid){
     document.getElementById("panel-dependents").innerHTML=depOnMe.map(function(r){
       return "<div class='rel-item' style='cursor:pointer;' onclick='drillToNode(\""+r.id+"\")'>"+esc(titleFor(r.id))+"</div>";
     }).join("")||"<span style='opacity:0.4;'>none</span>";
+    loadNodeContext(nid);
   }).catch(function(){});
   render();
 }
@@ -604,24 +604,49 @@ async function runBatchAssess(){
   layoutGraph(); render();
 }
 
-async function injectProblem(nodeId){
+// Lazily fetch + render a node's Chroma-grounded LLM context summary.
+async function loadNodeContext(nodeId){
+  var el=document.getElementById("panel-context");
+  if(!el) return;
+  el.textContent="Loading context...";
+  try{
+    var r=await fetch("/node/"+nodeId+"/context");
+    var d=await r.json();
+    el.textContent=d.summary||"No context.";
+  }catch(e){ el.textContent=""; }
+}
+
+function injectProblem(nodeId){
   if(!nodeId) return;
-  var n=graph.nodes[nodeId];
-  if(!n||!n.field_rules||!n.field_rules.length){alert("No field rules configured.");return;}
-  var fr=n.field_rules[0];
-  var field=fr.field;
-  var cur=n.raw_values&&n.raw_values[field]!=null?n.raw_values[field]:fr.expected;
-  var bad=parseFloat(prompt("Inject problem for "+n.title+"\nField: "+field+"\nCurrent value: "+cur+"\nExpected: "+fr.operator+" "+fr.expected,
-    fr.operator==="<"?Math.max(0,fr.expected-20):fr.expected+20));
-  if(isNaN(bad)) return;
-  var rawValues=n.raw_values||{};
-  rawValues[field]=bad;
-  var r=await fetch("/builder/nodes/"+nodeId+"/raw-values",{method:"POST",
+  removeInjectMenu();
+  var btn=document.getElementById("btn-inject");
+  var menu=document.createElement("div");
+  menu.className="weight-picker";
+  menu.id="inject-menu";
+  var levels=[["low","Reset (healthy)"],["medium","Medium"],["high","High"],["critical","Critical"]];
+  menu.innerHTML='<div style="padding:8px 16px;font-size:12px;color:#6b7280;border-bottom:1px solid #e5e7eb;">Inject problem severity</div>'+
+    levels.map(function(l){
+      return '<div class="w-row" onclick="confirmInject(\''+nodeId+'\',\''+l[0]+'\')">'+esc(l[1])+'</div>';
+    }).join("")+
+    '<div class="w-actions"><button onclick="removeInjectMenu()">Cancel</button></div>';
+  var rect=btn.getBoundingClientRect();
+  menu.style.left=rect.left+"px"; menu.style.top=(rect.bottom+4)+"px";
+  document.body.appendChild(menu);
+}
+
+function removeInjectMenu(){
+  var m=document.getElementById("inject-menu"); if(m) m.remove();
+}
+
+async function confirmInject(nodeId, severity){
+  removeInjectMenu();
+  var r=await fetch("/inject/"+nodeId,{method:"POST",
     headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({raw_values:rawValues})});
+    body:JSON.stringify({severity:severity})});
   var d=await r.json();
-  n.raw_values=d.raw_values;
-  alert("Injected. "+n.title+" "+field+" = "+bad);
+  await loadGraph();              // refresh severities for the whole graph
+  if(selectedNode===nodeId) selectNode(nodeId);  // refresh panel signals/relations
+  layoutGraph(); render();
 }
 
 function resetView(){ nodePositions={}; selectedNode=null; closePanel(); loadGraph(); }

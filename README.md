@@ -14,7 +14,7 @@ One Python package (`foursight`). A shared Foundation defines the data models, i
 
 ## Tech stack
 
-Python 3.11+, Pydantic v2, NetworkX, ChromaDB, OpenAI SDK (DeepSeek-compatible), FastMCP, FastAPI
+Python 3.11+, Pydantic v2, NetworkX, ChromaDB, Anthropic SDK (against DeepSeek's Anthropic-compatible endpoint), FastMCP, FastAPI
 
 ## Quick start
 
@@ -61,8 +61,8 @@ src/foursight/
 ├── sensitivity.py      # 4-level sensitivity + declassification
 ├── llm.py              # FakeLLM + DeepSeekLLM
 ├── vector_store.py     # FakeVector + ChromaVectorStore
-├── assess.py           # 5-step node assessment pipeline
-├── propagation.py      # Topological crawl, EPSILON early-stop
+├── assess.py           # Node assessment: leaf field rules + LLM, non-leaf weighted signal synthesis
+├── propagation.py      # Topological crawl (every changed signal propagates in demo mode)
 ├── reports.py          # Per-node cached reports + trace-to-source
 ├── seed.py             # build_seed() + load_company()
 ├── testkit.py          # Random DAG generator

@@ -56,6 +56,9 @@ class GraphStore:
     def influence_predecessors(self, node_id: str) -> list[str]:
         return list(self._infl.predecessors(node_id))
 
+    def influence_successors(self, node_id: str) -> list[str]:
+        return list(self._infl.successors(node_id))
+
     def closure(self, scope: list[str]) -> set[str]:
         seen, stack = set(scope), list(scope)
         while stack:

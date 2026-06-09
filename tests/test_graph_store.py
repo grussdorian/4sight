@@ -39,3 +39,14 @@ def test_cycle_rejected():
     s.add_edge("x", "y", EdgeType.DEPENDENCY)
     with pytest.raises(ValueError):
         s.add_edge("y", "x", EdgeType.DEPENDENCY)
+
+
+def test_influence_successors():
+    from foursight.models import Node, NodeKind, EdgeType
+    from foursight.graph_store import GraphStore
+    s = GraphStore()
+    for nid in ["leaf", "root"]:
+        s.add_node(Node(id=nid, kind=NodeKind.TASK, title=nid))
+    s.add_edge("leaf", "root", EdgeType.DEPENDENCY)  # influence leaf -> root
+    assert s.influence_successors("leaf") == ["root"]
+    assert s.influence_predecessors("root") == ["leaf"]

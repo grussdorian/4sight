@@ -33,3 +33,39 @@ def test_new_fields_persist():
     n = loaded.get_node("n1")
     assert n.description == "desc"
     assert n.delta_accumulator == 15.0
+
+
+def test_metrics_roundtrip():
+    import sqlite3
+    from foursight.db import init_db, seed_metrics, read_metrics, set_metric
+    conn = sqlite3.connect(":memory:")
+    init_db(conn)
+    seed_metrics(conn, [("sumco_yield", "yield_pct", 92.0)])
+    assert read_metrics(conn, "sumco_yield") == {"yield_pct": 92.0}
+    # seed is idempotent (INSERT OR IGNORE) — does not overwrite
+    seed_metrics(conn, [("sumco_yield", "yield_pct", 10.0)])
+    assert read_metrics(conn, "sumco_yield") == {"yield_pct": 92.0}
+    set_metric(conn, "sumco_yield", "yield_pct", 55.0)
+    assert read_metrics(conn, "sumco_yield") == {"yield_pct": 55.0}
+
+
+def test_save_load_preserves_query_and_sensitivity():
+    import sqlite3
+    from foursight.db import init_db, save_graph, load_graph
+    from foursight.graph_store import GraphStore
+    from foursight.models import Node, NodeKind, DataBinding, Sensitivity, FieldRule, Severity
+    s = GraphStore()
+    s.add_node(Node(id="leaf1", kind=NodeKind.LEAF, title="Leaf 1",
+                    data_binding=DataBinding(adapter_id="leaf1",
+                        query="SELECT field, value FROM leaf_metrics WHERE node_id='leaf1'",
+                        sensitivity=Sensitivity.CONFIDENTIAL,
+                        field_rules=[FieldRule(field="yield_pct", operator="<", expected=70.0,
+                                               severity_on_breach=Severity.HIGH)])))
+    conn = sqlite3.connect(":memory:")
+    init_db(conn)
+    save_graph(s, conn)
+    s2 = load_graph(conn)
+    binding = s2.get_node("leaf1").data_binding
+    assert binding.query.startswith("SELECT field, value")
+    assert binding.sensitivity == Sensitivity.CONFIDENTIAL
+    assert binding.field_rules[0].field == "yield_pct"

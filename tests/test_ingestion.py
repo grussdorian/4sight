@@ -19,3 +19,15 @@ def test_payroll_pii_free():
     pl = PayrollRedactedAdapter(target_node="comp_pool").emit_comp_delta(amount=23000)
     assert pl.target_node == "comp_pool" and "salary" not in pl.raw and "name" not in pl.raw
     assert pl.change.sensitivity == Sensitivity.INTERNAL
+
+
+def test_sql_adapter_fetch():
+    import sqlite3
+    from foursight.db import init_db, seed_metrics
+    from foursight.ingestion.sql_adapter import SqlSourceAdapter
+    conn = sqlite3.connect(":memory:")
+    init_db(conn)
+    seed_metrics(conn, [("sumco_yield", "yield_pct", 92.0)])
+    a = SqlSourceAdapter(conn, "sumco_yield",
+                         "SELECT field, value FROM leaf_metrics WHERE node_id='sumco_yield'")
+    assert a.fetch() == {"yield_pct": 92.0}

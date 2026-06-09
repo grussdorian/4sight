@@ -152,13 +152,14 @@ class Node(BaseModel):
     delta_accumulator: float = 0.0
     inbound_signals: list[Signal] = Field(default_factory=list)
     outbound_signal: Optional[Signal] = None
+    context_summary: str = ""   # cached LLM summary of Chroma vector hits
 
 
 class Edge(BaseModel):
     src: str
     dst: str
     type: EdgeType
-    weight: Severity = Severity.MEDIUM  # CRITICAL | HIGH | MEDIUM | LOW — edge importance
+    weight: Severity = Severity.MEDIUM  # CRITICAL | HIGH | MEDIUM | LOW -- edge importance
 
 
 class Viewer(BaseModel):

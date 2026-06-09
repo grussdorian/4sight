@@ -115,12 +115,15 @@ def build_mcp(store, engine, get_report: Callable, trace: Callable, name: str = 
         """
         if flatten is None or llm is None:
             return []
+        from .flatten import assessment_from_batch
         system, messages = flatten.build_batch_prompt(mode=mode)
         raw = llm.batch_assess(system, messages[0]["content"])
         assessments = flatten.parse_batch_response(raw)
-        for a in assessments:
-            node = store.get_node(a["node_id"])
-            node.current = a
+        for entry in assessments:
+            node = store.get_node(entry["node_id"])
+            node.current = assessment_from_batch(node, entry)
+            node.history.append(node.current.version)
+            node.outbound_signal = node.current.signal
             node.delta_accumulator = 0.0
         return assessments
 

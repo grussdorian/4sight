@@ -61,63 +61,47 @@ def _build_nonleaf_signal(node: Node, llm_verdict, sensitivity_val) -> Signal | 
     )
 
 
-def _build_synthesis_prompt(node: Node, store: GraphStore,
-                             redact_for_sensitivity) -> str | None:
-    """Build the LLM prompt for synthesizing upstream signals into a risk verdict."""
-    child_ids = store.children(node.id)
-    dep_ids = store.dependencies(node.id)
+def redact_cause(signal: Signal) -> str:
+    """Cause text is clearance-gated. INTERNAL is the baseline disclosure level,
+    so only CONFIDENTIAL and RESTRICTED causes are redacted; INTERNAL/PUBLIC
+    causes flow through to the synthesizing LLM (and to reviewers)."""
+    if signal.sensitivity in (Sensitivity.CONFIDENTIAL, Sensitivity.RESTRICTED):
+        return f"[REDACTED - {signal.sensitivity.value} restricted]"
+    return signal.cause
 
-    signal_lines = []
-    for cid in child_ids:
+
+def _collect_contributions(node: Node, store: GraphStore) -> list[dict]:
+    """Gather upstream signals with their edge weight and (redacted) cause.
+
+    Decomposition children are reached via edges (node -> child); dependency
+    sources via edges (source -> node). The weight is looked up on the matching
+    edge in each direction.
+    """
+    contributions: list[dict] = []
+
+    for cid in store.children(node.id):
         child = store.get_node(cid)
-        if not child.outbound_signal:
-            continue
         sig = child.outbound_signal
-        edge = next((e for e in store._edges
-                     if e.src == cid and e.dst == node.id), None)
-        weight = edge.weight.value if edge else "medium"
-        cause_text = sig.cause
-        if sig.sensitivity != Sensitivity("public"):
-            cause_text = redact_for_sensitivity(sig)
-        signal_lines.append(
-            f"- {child.title} [weight: {weight}, score: {sig.score:.0f}, "
-            f"severity: {sig.severity.value}]\n  cause: {cause_text}"
-        )
-
-    for did in dep_ids:
-        dep = store.get_node(did)
-        if not dep.outbound_signal:
+        if not sig:
             continue
+        edge = next((e for e in store._edges if e.src == node.id and e.dst == cid), None)
+        contributions.append({
+            "title": child.title, "score": sig.score, "severity": sig.severity.value,
+            "weight": edge.weight.value if edge else "medium", "cause": redact_cause(sig),
+        })
+
+    for did in store.dependencies(node.id):
+        dep = store.get_node(did)
         sig = dep.outbound_signal
-        edge = next((e for e in store._edges
-                     if e.src == did and e.dst == node.id), None)
-        weight = edge.weight.value if edge else "medium"
-        cause_text = sig.cause
-        if sig.sensitivity != Sensitivity("public"):
-            cause_text = redact_for_sensitivity(sig)
-        signal_lines.append(
-            f"- {dep.title} [weight: {weight}, score: {sig.score:.0f}, "
-            f"severity: {sig.severity.value}]\n  cause: {cause_text}"
-        )
+        if not sig:
+            continue
+        edge = next((e for e in store._edges if e.src == did and e.dst == node.id), None)
+        contributions.append({
+            "title": dep.title, "score": sig.score, "severity": sig.severity.value,
+            "weight": edge.weight.value if edge else "medium", "cause": redact_cause(sig),
+        })
 
-    if not signal_lines:
-        return None  # No upstream signals — skip LLM call
-
-    prompt = (
-        f"Task: {node.title}\n"
-        f"Description: {node.description or 'No description'}\n\n"
-        f"Upstream signals:\n"
-        + "\n".join(signal_lines)
-        + "\n\nSynthesize these into a single risk assessment. "
-          "Weight tags tell you how seriously to treat each signal. "
-          "If a cause is redacted, rely on the score and severity alone. "
-          "Consider compounding effects — multiple moderate signals may "
-          "compound into a higher risk than any individually.\n\n"
-          'Reply with JSON only: {"score": <number 0-100>, '
-          '"severity": "low"|"medium"|"high"|"critical", '
-          '"cause": "<2-3 sentence synthesis>"}'
-    )
-    return prompt
+    return contributions
 
 
 def assess(node: Node, store: GraphStore, llm, vector, triggered_by: dict) -> Assessment:
@@ -174,28 +158,19 @@ def assess(node: Node, store: GraphStore, llm, vector, triggered_by: dict) -> As
         node.outbound_signal = signal
         return a
 
-    # Non-leaf: collect signals, build synthesis prompt, ask LLM to synthesize
-    def redact(sig: Signal) -> str:
-        return f"[REDACTED - {sig.sensitivity.value} restricted]"
+    # Non-leaf: collect weighted upstream signals and ask the LLM to synthesize them.
+    contributions = _collect_contributions(node, store)
+    grounding = vector.query(node.title, k=2)
 
-    prompt = _build_synthesis_prompt(node, store, redact)
-
-    if prompt is None:
-        # No upstream signals — no assessment
-        grounding = vector.query(node.title, k=2)
+    if not contributions:
+        # No upstream signals -- no outbound signal, no synthesis.
         signal = None
         verdict_score = rule.score
         verdict = LLMVerdict(final_score=rule.score, severity=Severity.LOW,
                              rationale="no upstream signals", model=llm.model)
     else:
-        # Call LLM to synthesize — use verify_score for single-node synthesis
-        grounding = vector.query(node.title, k=2)
         try:
-            verdict = llm.verify_score(
-                node=node, rule_score=rule.score,
-                rule_inputs={"synthesis_prompt": prompt, **rule.inputs},
-                grounding=grounding,
-            )
+            verdict = llm.synthesize(node, contributions)
         except Exception:
             verdict = LLMVerdict(
                 final_score=rule.score, severity=Severity.MEDIUM,

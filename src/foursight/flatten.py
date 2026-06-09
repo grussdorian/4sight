@@ -1,6 +1,38 @@
 from __future__ import annotations
+from datetime import datetime, timezone
 from .graph_store import GraphStore
-from .models import Node
+from .models import (
+    Node, Assessment, LLMVerdict, Severity, Sensitivity, Signal, severity_from_score,
+)
+
+RULE_VERSION = "ops-risk-v2"
+
+
+def assessment_from_batch(node: Node, entry: dict) -> Assessment:
+    """Convert one batch_assess response entry into a real Assessment.
+
+    The batch LLM returns plain dicts ({node_id, final_score, severity,
+    rationale, summary}); writing those straight into node.current corrupted
+    the graph (every later node.current.llm_verdict access blew up). This
+    builds a proper, version-bumped Assessment with a propagating Signal.
+    """
+    score = float(entry.get("final_score", 0.0))
+    sev_str = entry.get("severity", "")
+    severity = Severity(sev_str) if sev_str in [s.value for s in Severity] else severity_from_score(score)
+    rationale = entry.get("rationale") or entry.get("summary", "")
+
+    prev = node.current
+    version = (prev.version + 1) if isinstance(prev, Assessment) else 1
+    verdict = LLMVerdict(final_score=score, severity=severity, rationale=rationale,
+                         adjusted=True, model="batch")
+    signal = Signal(source_node=node.id, score=score, severity=severity,
+                    cause=rationale,
+                    sensitivity=node.data_binding.sensitivity if node.data_binding else Sensitivity.INTERNAL)
+    return Assessment(
+        node_id=node.id, version=version, computed_at=datetime.now(timezone.utc),
+        rule_score=score, rule_version=RULE_VERSION, llm_verdict=verdict,
+        signal=signal,
+    )
 
 
 class FlattenEngine:
