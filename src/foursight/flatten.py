@@ -161,7 +161,29 @@ class FlattenEngine:
         try:
             return json.loads(text)
         except json.JSONDecodeError:
-            start, end = text.find("["), text.rfind("]")
-            if start != -1 and end > start:
+            pass
+        start, end = text.find("["), text.rfind("]")
+        if start != -1 and end > start:
+            try:
                 return json.loads(text[start:end + 1])
-            raise
+            except json.JSONDecodeError:
+                pass
+        # Salvage: collect every complete top-level {...} object, even from a
+        # truncated array (model output cut off mid-response).
+        objs, depth, begin = [], 0, None
+        for i, ch in enumerate(text):
+            if ch == "{":
+                if depth == 0:
+                    begin = i
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0 and begin is not None:
+                    try:
+                        objs.append(json.loads(text[begin:i + 1]))
+                    except json.JSONDecodeError:
+                        pass
+                    begin = None
+        if objs:
+            return objs
+        raise ValueError("no parseable assessments in batch response")

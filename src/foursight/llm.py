@@ -93,8 +93,14 @@ class DeepSeekLLM:
         from anthropic import Anthropic
         # Model is overridable via env (deepseek-v4-flash | deepseek-v4-pro | ...).
         self.model = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
-        self._client = Anthropic(api_key=os.environ["DEEPSEEK_API_KEY"],
+        key = os.environ["DEEPSEEK_API_KEY"]
+        # Anthropic endpoint for per-node verify/synthesize/summarize (thinking).
+        self._client = Anthropic(api_key=key,
                                  base_url="https://api.deepseek.com/anthropic")
+        # OpenAI endpoint for the single whole-graph batch call: reliable
+        # structured output without the thinking endpoint's empty-response quirk.
+        from openai import OpenAI
+        self._oai = OpenAI(api_key=key, base_url="https://api.deepseek.com")
 
     def _extract_text(self, response) -> str:
         text = ""
@@ -241,19 +247,18 @@ class DeepSeekLLM:
         return self._extract_text(resp).strip()
 
     def batch_assess(self, system: str, prompt: str) -> str:
-        # One call scores the whole graph. A small thinking budget keeps the
-        # response reliable (without it the endpoint intermittently returns an
-        # empty completion) while staying far faster than a large budget. Retry
-        # a couple of times if the model still returns empty text.
+        # One call scores the whole graph via the OpenAI-compatible endpoint,
+        # which returns structured output reliably (the Anthropic thinking
+        # endpoint intermittently returned empty completions here). Retry a
+        # couple of times defensively.
         for _ in range(3):
-            resp = self._client.messages.create(
+            resp = self._oai.chat.completions.create(
                 model=self.model,
                 max_tokens=4096,
-                thinking={"type": "enabled", "budget_tokens": 1536},
-                system=system,
-                messages=[{"role": "user", "content": prompt}],
+                messages=[{"role": "system", "content": system},
+                          {"role": "user", "content": prompt}],
             )
-            text = self._extract_text(resp).strip()
+            text = (resp.choices[0].message.content or "").strip()
             if text:
                 return text
         return ""

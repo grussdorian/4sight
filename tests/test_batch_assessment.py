@@ -60,3 +60,21 @@ def test_fake_llm_still_uses_deterministic_per_node():
     c = TestClient(build_app(seed_fn=load_supply_chain))
     root = c.get("/report/fab17_output", params={"role": "reviewer"}).json()
     assert root["severity"] in ("low", "medium")  # healthy baseline
+
+
+def test_parse_batch_response_robustness():
+    from foursight.flatten import FlattenEngine
+    from foursight.fakes import FakeStore
+    flat = FlattenEngine(FakeStore())
+    # clean array
+    assert flat.parse_batch_response('[{"node_id":"a","final_score":1}]')[0]["node_id"] == "a"
+    # markdown fenced
+    fenced = '```json\n[{"node_id":"b","final_score":2}]\n```'
+    assert flat.parse_batch_response(fenced)[0]["node_id"] == "b"
+    # surrounding prose
+    prose = 'Here are the assessments:\n[{"node_id":"c","final_score":3}]\nDone.'
+    assert flat.parse_batch_response(prose)[0]["node_id"] == "c"
+    # truncated array -> salvage complete objects
+    trunc = '[{"node_id":"d","final_score":4},{"node_id":"e","final_score":5},{"node_id":"f"'
+    salvaged = flat.parse_batch_response(trunc)
+    assert [o["node_id"] for o in salvaged] == ["d", "e"]
