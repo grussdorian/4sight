@@ -110,7 +110,8 @@ def test_logistics_inbound_excludes_consumers():
 def test_panel_hides_generic_ladder_and_shows_readings():
     c = _client()
     c.get("/builder/graph")  # assess (populates raw_values)
-    d = c.get("/builder/nodes/sumco_yield").json()
+    # sumco_yield is confidential; read its data as privileged.
+    d = c.get("/builder/nodes/sumco_yield?role=privileged").json()
     fields = {fr["field"] for fr in d["field_rules"]}
     assert fields == {"yield_pct"}, fields          # only real graded rules, <=4
     assert len(d["field_rules"]) <= 4

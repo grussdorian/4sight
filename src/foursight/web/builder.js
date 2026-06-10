@@ -180,11 +180,15 @@ async function renderReport(){
       "<span class='dsev' style='color:"+SEVC[s]+"'>"+s+"</span><span class='arrow'>&rsaquo;</span></div>";
   }).join("");
   var stats="";
-  var rv=d.raw_values||{}, rvk=Object.keys(rv);
-  if(rvk.length) stats+="<div class='rpt-stat'><div class='k'>Current value</div><div class='v'>"+rvk.map(function(k){return esc(k)+" = <b>"+esc(String(rv[k]))+"</b>";}).join("<br>")+"</div></div>";
-  if(d.field_rules&&d.field_rules.length) stats+="<div class='rpt-stat'><div class='k'>Threshold</div><div class='v'>"+d.field_rules.map(function(fr){
-    return esc(fr.field)+" "+esc(fr.operator||"")+" "+esc(String(fr.expected))+" &rarr; "+esc(fr.severity_on_breach);
-  }).join("<br>")+"</div></div>";
+  if(d.data_restricted){
+    stats+="<div class='rpt-stat'><div class='k'>Data</div><div class='v'>&#128274; restricted to privileged role</div></div>";
+  }else{
+    var rv=d.raw_values||{}, rvk=Object.keys(rv);
+    if(rvk.length) stats+="<div class='rpt-stat'><div class='k'>Current value</div><div class='v'>"+rvk.map(function(k){return esc(k)+" = <b>"+esc(String(rv[k]))+"</b>";}).join("<br>")+"</div></div>";
+    if(d.field_rules&&d.field_rules.length) stats+="<div class='rpt-stat'><div class='k'>Threshold</div><div class='v'>"+d.field_rules.map(function(fr){
+      return esc(fr.field)+" "+esc(fr.operator||"")+" "+esc(String(fr.expected))+" &rarr; "+esc(fr.severity_on_breach);
+    }).join("<br>")+"</div></div>";
+  }
   card.innerHTML="<div class='rpt'>"+
     "<div class='rpt-head'><span class='rpt-title'>"+esc(d.title||nid)+"</span>"+
       "<span class='badge kind'>"+esc(d.kind||"")+"</span>"+

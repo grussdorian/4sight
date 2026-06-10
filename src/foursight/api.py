@@ -31,7 +31,7 @@ def _redact_cause(signal_dict: dict | None, role: str) -> dict | None:
         return None
     sens = signal_dict.get("sensitivity", "internal")
     if not _can_view(role, sens):
-        return {**signal_dict, "cause": f"[restricted — {sens}]"}
+        return {**signal_dict, "cause": f"[restricted - {sens}]"}
     return signal_dict
 
 def _redact_mitigation(node, role: str) -> str:
@@ -39,23 +39,49 @@ def _redact_mitigation(node, role: str) -> str:
     if not node.mitigation:
         return ""
     if node.data_binding and not _can_view(role, node.data_binding.sensitivity.value):
-        return f"[restricted — {node.data_binding.sensitivity.value}]"
+        return f"[restricted - {node.data_binding.sensitivity.value}]"
     if node.current and not _can_view(role, node.current.sensitivity.value):
-        return f"[restricted — {node.current.sensitivity.value}]"
+        return f"[restricted - {node.current.sensitivity.value}]"
     return node.mitigation
 
 def _redact_context(node, role: str) -> str:
-    """Redact context summary if the node's sensitivity exceeds the viewer's role."""
+    """Redact context summary if the node's sensitivity exceeds the viewer's role.
+    For a leaf the binding's sensitivity is authoritative (a batch-assessed leaf's
+    Assessment defaults to INTERNAL, which would otherwise under-protect a
+    confidential human leaf like Alice/Bob)."""
     if not node.context_summary:
         return ""
-    if not _can_view(role, node.current.sensitivity.value if node.current else "internal"):
-        return f"[restricted — {node.current.sensitivity.value if node.current else 'internal'}]"
+    sens = (node.data_binding.sensitivity.value if node.data_binding
+            else (node.current.sensitivity.value if node.current else "internal"))
+    if not _can_view(role, sens):
+        return f"[restricted - {sens}]"
     return node.context_summary
 
 
+# Synthetic ladder fields that drive the simulate-change demo; hidden from the
+# field-rule UI so only real domain rules are shown.
+GENERIC_LADDER_FIELDS = {"effect_score", "capacity_drop_pct", "single_owner", "data_age_h"}
+
+
+def _gated_leaf_data(node, role: str):
+    """Sensitivity-gated view of a leaf's underlying data. A viewer without
+    clearance for the node's sensitivity sees its severity only -- never the raw
+    readings, field rules, or query (Alice/Bob are confidential human risk
+    factors). Returns (query, field_rule_models, raw_values, restricted)."""
+    binding = node.data_binding
+    if not binding:
+        return "", [], {}, False
+    if _can_view(role, binding.sensitivity.value):
+        return binding.query, list(binding.field_rules), dict(binding.raw_values), False
+    return "", [], {}, True
+
+
 def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
-              db_path=None, llm=None, vector=None, context_llm=None) -> FastAPI:
+              db_path=None, llm=None, vector=None, context_llm=None,
+              notifier=None) -> FastAPI:
     import sqlite3
+    from .notify import TelegramNotifier, severity_increased
+    notifier = notifier if notifier is not None else TelegramNotifier()
     from .db import init_db, save_graph, load_graph, seed_metrics, read_metrics, set_metric
     from .triggers import TriggerEngine
     from .poll import PollService
@@ -124,7 +150,7 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
                 _undo_stack.pop(i)
                 break
 
-    def _assess_all():
+    def _do_assess():
         """Re-assess only the nodes affected by a change: refresh readings, find
         which leaves changed (plus any never-assessed nodes), and re-score that
         influence cone. Unchanged branches keep their severity. With real DeepSeek
@@ -151,6 +177,8 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
             from .flatten import FlattenEngine, assessment_from_batch, input_snapshot, history_match
             from .reports import static_report
             from .db import record_history
+            from .rules import score_leaf
+            from .models import severity_from_score
             flat = FlattenEngine(store, eng.vector, conn)
             system, messages = flat.build_batch_prompt(scope=scope)
             try:
@@ -174,6 +202,23 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
                     try:
                         node = store.get_node(nid)
                         node.current = assessment_from_batch(node, entry)
+                        # Deterministic leaf pin: a leaf with a breached field
+                        # rule (a structured threshold or an active qualitative
+                        # condition) is fully determined by its rules, not the
+                        # LLM. Pin it so its severity is stable and matches what
+                        # it propagates to consumers.
+                        if node.kind == NodeKind.LEAF and node.data_binding:
+                            rr = score_leaf(node)
+                            if rr.inputs.get("breached"):
+                                pin = severity_from_score(rr.score)
+                                cause = "; ".join(f"{b['field']} -> {b['severity']}"
+                                                  for b in rr.inputs["breached"])
+                                node.current.llm_verdict.final_score = rr.score
+                                node.current.llm_verdict.severity = pin
+                                node.current.llm_verdict.rationale = cause
+                                node.current.signal.score = rr.score
+                                node.current.signal.severity = pin
+                                node.current.signal.cause = cause
                         # Deterministic anchoring: if the current input severities
                         # exactly match a past judgment, override the LLM's score.
                         snap = input_snapshot(store, nid)
@@ -217,6 +262,38 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
         _dirty.clear()
         _boot["assessed"] = True
         _persist()
+
+    # Root-severity escalation push: when the program root's severity rises to a
+    # higher band than the previous assessment, send a Telegram alert. The
+    # baseline (first assessment after boot) never alerts -- only increases do.
+    _root_state = {"severity": None}
+
+    def _find_root_id():
+        """The root is the top of the influence graph: signals flow into it but
+        it flows nowhere downstream (no influence successors)."""
+        for nid in store.all_ids():
+            if not store.influence_successors(nid):
+                return nid
+        ids = store.all_ids()
+        return ids[0] if ids else None
+
+    def _check_root_escalation():
+        rid = _find_root_id()
+        if not rid or rid not in store.nodes:
+            return
+        node = store.get_node(rid)
+        sev = node.current.llm_verdict.severity.value if node.current else None
+        if sev is None:
+            return
+        prev = _root_state["severity"]
+        _root_state["severity"] = sev
+        if severity_increased(prev, sev):
+            notifier.send(f"⚠️ 4sight alert\n{node.title} risk escalated: "
+                          f"{prev.upper()} → {sev.upper()}")
+
+    def _assess_all():
+        _do_assess()
+        _check_root_escalation()
 
     def _ensure_assessed():
         if not _boot["assessed"]:
@@ -495,12 +572,7 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
 
     @app.get("/root")
     def get_root():
-        # The root is the top of the influence graph: signals flow into it but
-        # it flows nowhere downstream (no influence successors).
-        for nid in store.all_ids():
-            if not store.influence_successors(nid):
-                return {"node_id": nid}
-        return {"node_id": store.all_ids()[0] if store.all_ids() else ""}
+        return {"node_id": _find_root_id() or ""}
 
     @app.get("/trace/{node_id}")
     def trace(node_id: str):
@@ -562,6 +634,7 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
             if pn.outbound_signal:
                 inbound.append(_redact_cause(pn.outbound_signal.model_dump(mode="json"), role))
         outbound = _redact_cause(node.outbound_signal.model_dump(mode="json") if node.outbound_signal else None, role)
+        query_v, fr_models, raw_values_v, data_restricted = _gated_leaf_data(node, role)
         return {
             "id": node.id, "kind": node.kind.value, "title": node.title,
             "description": node.description,
@@ -576,13 +649,11 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
             "mitigation": _redact_mitigation(node, role),
             "severity": node.current.llm_verdict.severity.value if node.current else None,
             "adapter_id": node.data_binding.adapter_id if node.data_binding else "",
-            "query": node.data_binding.query if node.data_binding else "",
-            "field_rules": [
-                fr.model_dump(mode="json")
-                for fr in (node.data_binding.field_rules if node.data_binding else [])
-                if fr.field not in {"effect_score", "capacity_drop_pct", "single_owner", "data_age_h"}
-            ],
-            "raw_values": node.data_binding.raw_values if node.data_binding else {},
+            "query": query_v,
+            "field_rules": [fr.model_dump(mode="json") for fr in fr_models
+                            if fr.field not in GENERIC_LADDER_FIELDS],
+            "raw_values": raw_values_v,
+            "data_restricted": data_restricted,
             "inbound_signals": inbound,
             "outbound_signal": outbound,
         }
@@ -606,14 +677,30 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
                     expected=float(fr.get("expected", 0)),
                     severity_on_breach=Severity(fr.get("severity_on_breach", "medium")),
                 ))
+            # Preserve an existing node's sensitivity on edit so editing a
+            # confidential human leaf (Alice/Bob) never silently downgrades it to
+            # internal and leaks its data. A new node may set sensitivity via the
+            # body; otherwise it defaults to internal.
+            sens = Sensitivity.INTERNAL
+            if nid in store.nodes and store.get_node(nid).data_binding:
+                sens = store.get_node(nid).data_binding.sensitivity
+            if body.get("sensitivity"):
+                try:
+                    sens = Sensitivity(body["sensitivity"])
+                except ValueError:
+                    pass
             binding = DataBinding(
                 adapter_id=adapter_id, query=query,
-                sensitivity=Sensitivity.INTERNAL,
+                sensitivity=sens,
                 field_rules=field_rules,
             )
-            existing = store.find_duplicate_source(binding)
-            if existing:
-                return {"id": existing, "deduped": True}
+            # Dedup only protects against creating a NEW SQL-backed source that
+            # duplicates an existing one. Never dedup an edit (a node would match
+            # itself) or a query-less qualitative leaf (they all share query="").
+            if query.strip() and nid not in store.nodes:
+                existing = store.find_duplicate_source(binding)
+                if existing and existing != nid:
+                    return {"id": existing, "deduped": True}
             # Preserve existing readings so a field-rule edit doesn't lose the
             # leaf's current data values (which live in DB + raw_values).
             if nid in store.nodes:
@@ -826,13 +913,15 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
         nodes = []
         for nid in store.all_ids():
             n = store.get_node(nid)
+            _q, fr_models, raw_values_v, data_restricted = _gated_leaf_data(n, role)
             nodes.append({
                 "id": nid, "kind": n.kind.value, "title": n.title,
                 "description": n.description,
                 "severity": n.current.llm_verdict.severity.value if n.current else None,
                 "delta_accumulator": n.delta_accumulator,
-                "field_rules": [fr.model_dump(mode="json") for fr in (n.data_binding.field_rules if n.data_binding else [])],
-                "raw_values": n.data_binding.raw_values if n.data_binding else {},
+                "field_rules": [fr.model_dump(mode="json") for fr in fr_models],
+                "raw_values": raw_values_v,
+                "data_restricted": data_restricted,
                 "mitigation": _redact_mitigation(n, role),
                 "outbound_signal": _redact_cause(n.outbound_signal.model_dump(mode="json") if n.outbound_signal else None, role),
             })

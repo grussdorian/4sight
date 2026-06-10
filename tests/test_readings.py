@@ -28,7 +28,8 @@ def test_reading_override_survives_reassessment():
     c = _client()
     c.post("/node/sumco_yield/readings", json={"readings": {"yield_pct": 45}})
     c.post("/assess")
-    d = c.get("/builder/nodes/sumco_yield").json()
+    # sumco_yield is confidential; read its data as privileged.
+    d = c.get("/builder/nodes/sumco_yield?role=privileged").json()
     assert d["raw_values"]["yield_pct"] == 45.0
 
 

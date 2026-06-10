@@ -102,7 +102,16 @@ def score_leaf(node: Node) -> RuleResult:
 
     for rule in binding.field_rules:
         if rule.kind == "unstructured":
+            # A qualitative/unstructured rule has no numeric threshold: its
+            # PRESENCE asserts the condition is active (e.g. "Alice is on
+            # leave"). It contributes its severity directly so human-risk
+            # factors score and propagate. Delete the rule to clear it.
             inputs.setdefault("unstructured_fields", []).append(rule.field)
+            s = _severity_to_score(rule.severity_on_breach)
+            max_score = max(max_score, s)
+            breached.append({"field": rule.field, "value": "active",
+                             "expected": "asserted", "operator": "is",
+                             "severity": rule.severity_on_breach.value})
             continue
 
         val = raw.get(rule.field)

@@ -56,14 +56,17 @@ def test_leaf_multiple_fields_max_severity():
     assert len(r.inputs["breached"]) == 2
 
 
-def test_leaf_unstructured_skipped_by_rules():
+def test_leaf_unstructured_rule_is_active_condition():
+    # An unstructured (qualitative) rule's presence asserts the condition, so it
+    # contributes its severity to the leaf score and surfaces as a breach.
     fr = FieldRule(field="notes", kind="unstructured",
                    severity_on_breach=Severity.MEDIUM)
     db = DataBinding(adapter_id="csv", field_rules=[fr])
     leaf = Node(id="l", kind=NodeKind.LEAF, title="leaf", data_binding=db)
     r = score_node(leaf, [], [])
-    assert r.score == 0.0
+    assert r.score == 37.0  # MEDIUM band
     assert "unstructured_fields" in r.inputs
+    assert any(b["field"] == "notes" for b in r.inputs["breached"])
 
 
 def test_task_with_upstream_signals():
