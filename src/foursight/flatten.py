@@ -40,16 +40,38 @@ def assessment_from_batch(node: Node, entry: dict) -> Assessment:
     )
 
 
+def history_match(conn, node_id: str, current_inputs: list) -> dict | None:
+    """If the current inputs exactly match a past judgment (same set of
+    {id, severity}), return the most recent matching judgment so the LLM score
+    can be overridden. Returns None if no match or if there are no inputs
+    (a leaf node with no upstream signals should not be anchored — its score
+    comes from its raw data, not its own history)."""
+    if not current_inputs:
+        return None
+    from .db import read_history
+    try:
+        hist = read_history(conn, node_id)
+    except Exception:
+        return None
+    current_key = tuple(sorted((i["id"], i["severity"]) for i in current_inputs))
+    # Iterate newest-first: the most recent match is the right anchor.
+    for entry in reversed(hist):
+        past_key = tuple(sorted((i.get("id"), i["severity"]) for i in entry["inputs"]))
+        if current_key == past_key:
+            return entry
+    return None
+
+
 def input_snapshot(store, node_id: str) -> list:
-    """A compact record of the inputs feeding a node (its predecessors' current
-    signals), used both to anchor the prompt and to key the history."""
+    """A compact severity-keyed record of the inputs feeding a node (its
+    predecessors' current signals). Severity-only so a node anchors to a past
+    judgment whenever the input SEVERITIES match, regardless of exact scores."""
     snap = []
     for p in store.influence_predecessors(node_id):
         pn = store.get_node(p)
         if pn.outbound_signal:
             snap.append({"id": p, "title": pn.title,
-                         "severity": pn.outbound_signal.severity.value,
-                         "score": round(pn.outbound_signal.score)})
+                         "severity": pn.outbound_signal.severity.value})
     return snap
 
 
@@ -143,7 +165,8 @@ class FlattenEngine:
             if hist:
                 hl = []
                 for h in hist[-6:]:
-                    ins = ", ".join(f"{i.get('title', i.get('id'))}={i['severity']}/{i['score']}"
+                    ins = ", ".join(f"{i.get('title', i.get('id'))}={i['severity']}"
+                                    f"/{i['score']}" if 'score' in i else ""
                                     for i in h["inputs"]) or "(none)"
                     hl.append(f"  inputs[{ins}] -> {h['severity']}")
                 lines.append("Past judgments (reproduce the same severity for matching inputs):\n"

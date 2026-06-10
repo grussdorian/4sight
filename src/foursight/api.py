@@ -81,7 +81,7 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
         if getattr(getattr(eng, "llm", None), "model", "fake") == "fake":
             eng.run_crawl(list(dirty), TriggerType.NODE_FIRED)
         else:
-            from .flatten import FlattenEngine, assessment_from_batch, input_snapshot
+            from .flatten import FlattenEngine, assessment_from_batch, input_snapshot, history_match
             from .reports import static_report
             from .db import record_history
             flat = FlattenEngine(store, eng.vector, conn)
@@ -102,6 +102,20 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
                     try:
                         node = store.get_node(nid)
                         node.current = assessment_from_batch(node, entry)
+                        # Deterministic anchoring: if the current input severities
+                        # exactly match a past judgment, override the LLM's score.
+                        snap = input_snapshot(store, nid)
+                        match = history_match(conn, nid, snap)
+                        if match:
+                            sev = Severity(match["severity"])
+                            score = float(match["score"])
+                            node.current.llm_verdict.final_score = score
+                            node.current.llm_verdict.severity = sev
+                            node.current.llm_verdict.rationale = (
+                                f"[anchored] {match.get('rationale', '')}")
+                            node.current.signal.score = score
+                            node.current.signal.severity = sev
+                            node.current.signal.cause = node.current.llm_verdict.rationale
                         node.history.append(node.current.version)
                         node.outbound_signal = node.current.signal
                         applied.append(node)
