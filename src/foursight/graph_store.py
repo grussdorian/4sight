@@ -60,10 +60,19 @@ class GraphStore:
         return list(self._infl.successors(node_id))
 
     def closure(self, scope: list[str]) -> set[str]:
+        """All nodes in the influence cone of `scope` — both downstream
+        (nodes that depend on scope via successors) and upstream (nodes
+        that scope depends on via predecessors). This covers both edge
+        conventions: leaf→task and task→leaf. The crawl only visits
+        the relevant subset."""
         seen, stack = set(scope), list(scope)
         while stack:
             n = stack.pop()
             for s in self._infl.successors(n):
+                if s not in seen:
+                    seen.add(s)
+                    stack.append(s)
+            for s in self._infl.predecessors(n):
                 if s not in seen:
                     seen.add(s)
                     stack.append(s)

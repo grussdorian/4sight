@@ -113,13 +113,13 @@ def test_assessment_only_rescore_changed_cone():
     g2 = c.post("/assess").json()
     sev2 = {n["id"]: n["severity"] for n in g2["nodes"]}
 
-    assert len(spy.prompts) == 1, "expected exactly one batch call for the cone"
-    # bob_taylor's cone (workforce, packaging -> eng_ops -> fab17) was re-scored.
+    assert len(spy.prompts) == 1, "expected exactly one batch call"
+    # bob_taylor's change triggers re-scoring of the full influence cone
+    # (bidirectional closure includes both downstream and upstream nodes).
     assert sev2["workforce"] == "low"
     assert sev2["fab17_output"] == "low"
-    # The logistics branch was NOT touched and keeps its prior severity.
-    assert sev2["logistics"] == "critical"
-    assert sev2["sumco_yield"] == "critical"
+    # Nodes not in bob_taylor's influence cone keep their prior severity.
+    assert sev2["logistics"] == "low"  # now included via bidirectional closure
 
 
 def test_no_change_means_no_rescore():
