@@ -727,6 +727,7 @@ function saveReadings(){
     body:JSON.stringify({readings:readings})})
     .then(function(r){return r.json();}).then(function(d){
       if(graph.nodes[selectedNode]) graph.nodes[selectedNode].raw_values=d.raw_values;
+      renderReadings(d.raw_values);
       markAssessmentStale();
     });
 }
