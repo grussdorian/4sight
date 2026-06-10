@@ -700,7 +700,7 @@ function selectNode(nid){
     // Surface the SQL query for data-source (leaf) nodes.
     document.getElementById("panel-adapter").value=d.adapter_id||"";
     document.getElementById("panel-query").value=d.query||"";
-    // Qualitative leaves (no SQL query): show field rules, hide raw readings + query.
+    var isAdmin=(currentRole==="privileged");
     var isQualitative=(d.kind==="leaf"&&!d.query);
     var rsec=document.getElementById("panel-readings-section");
     var qsec=document.getElementById("panel-leaf-fields");
@@ -713,6 +713,11 @@ function selectNode(nid){
       if(qsec) qsec.style.display=(d.kind==="leaf"?"block":"none");
       document.getElementById("panel-readings-label").textContent="Current Readings";
     }
+    // Field rules editing: only admin can see/edit them on qualitative leaves.
+    var frSection=document.getElementById("panel-field-rules-section");
+    if(frSection) frSection.style.display=(isAdmin&&isQualitative)?"block":"none";
+    var addBtn=document.getElementById("btn-add-field-rule");
+    if(addBtn) addBtn.style.display=isAdmin?"":"none";
     renderReadings(d.raw_values||{});
     renderFieldRules(d.field_rules||[]);
     renderSignals(d.inbound_signals||[], d.outbound_signal);
@@ -727,18 +732,19 @@ function selectNode(nid){
     document.getElementById("panel-dependents").innerHTML=depOnMe.map(function(r){
       return "<div class='rel-item' style='cursor:pointer;' onclick='drillToNode(\""+r.id+"\")'>"+esc(titleFor(r.id))+"</div>";
     }).join("")||"<span style='opacity:0.4;'>none</span>";
-    // Context (vector search + LLM) is for UNSTRUCTURED sources and tasks only.
-    // A SQL data source (has a query) is structured -- no vector search.
+    // Context (vector search + LLM) — admin only for qualitative leaves.
     var section=document.getElementById("panel-context-section");
     if(d.query){
       section.style.display="none";
-    }else{
+    }else if(isAdmin||d.kind==="task"){
       section.style.display="block";
       loadNodeContext(nid);
+    }else{
+      section.style.display="none";
     }
-    // Load mitigation for task nodes with risk
+    // Mitigation: only admin sees suggestions for task nodes at risk.
     var ms=document.getElementById("panel-mitigation-section");
-    if(d.kind!=="leaf"&&d.severity&&d.severity!=="low"){
+    if(isAdmin&&d.kind!=="leaf"&&d.severity&&d.severity!=="low"){
       if(ms) ms.style.display="block";
       loadNodeMitigation(nid);
     }else{

@@ -32,9 +32,9 @@ class FakeLLM:
         score, adjusted = rule_score, False
         rationale = f"Rule score {rule_score:.0f} for {node.title}."
 
-        # If there are unstructured (qualitative) fields, treat them as active
-        # concerns only when there is actual data (effect_score from inject) or
-        # a positive rule_score. A quiet qualitative leaf scores 0.
+        # Unstructured (qualitative) fields: use the highest severity level
+        # from the node's field rules as the judgment. A qualitative leaf
+        # with active concerns (field rules present) is never "quiet."
         unstructured = rule_inputs.get("unstructured_fields", [])
         if unstructured:
             eff = float(node.data_binding.raw_values.get("effect_score", 0)) if node.data_binding else 0.0
@@ -46,7 +46,20 @@ class FakeLLM:
                 score = rule_score
                 adjusted = True
                 rationale = f"Unstructured fields ({len(unstructured)}) present. " + rationale
-            # else: no active data — score stays at 0 (the leaf is quiet)
+            elif node.data_binding and node.data_binding.field_rules:
+                # No numeric data — score from the highest-severity qualitative rule.
+                from .models import Severity as Sev
+                sevs = [Sev(fr.severity_on_breach) if isinstance(fr.severity_on_breach, Sev) else Sev(fr.severity_on_breach)
+                        for fr in node.data_binding.field_rules if fr.kind == "unstructured"]
+                if sevs:
+                    top = max(sevs, key=lambda s: {"low": 0, "medium": 1, "high": 2, "critical": 3}[s.value])
+                    score = {"low": 12.0, "medium": 37.0, "high": 62.0, "critical": 88.0}[top.value]
+                    adjusted = True
+                    rationale = f"Qualitative factors present (max severity: {top.value}). " + rationale
+            else:
+                score = 37.0  # fallback: unstructured fields present, at least medium
+                adjusted = True
+                rationale = f"Qualitative factors require monitoring. " + rationale
 
         if rule_inputs.get("single_owner"):
             score = max(score, 85.0)
