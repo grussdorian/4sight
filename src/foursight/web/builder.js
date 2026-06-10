@@ -28,6 +28,7 @@ function init(){
   initPanelResize();
   resizeSVG();
   loadGraph();
+  updateUndoButton();
 }
 
 function resizeSVG(){
@@ -390,6 +391,7 @@ function confirmWeightPicker(){
   removeWeightPicker();
   pendingEdge=null;
   layoutGraph(); render();
+  updateUndoButton();
 }
 
 function cancelWeightPicker(){
@@ -526,6 +528,7 @@ async function saveNodePanel(){
       document.getElementById("btn-delete").style.display="block";
     }
     layoutGraph(); render();
+    updateUndoButton();
   });
 }
 
@@ -729,6 +732,7 @@ function saveReadings(){
       if(graph.nodes[selectedNode]) graph.nodes[selectedNode].raw_values=d.raw_values;
       renderReadings(d.raw_values);
       markAssessmentStale();
+      updateUndoButton();
     });
 }
 
@@ -785,7 +789,9 @@ function deleteSelectedNode(){
     delete graph.nodes[selectedNode]; delete nodePositions[selectedNode];
     graph.edges=graph.edges.filter(function(e){return e.src!==selectedNode&&e.dst!==selectedNode;});
     closePanel(); layoutGraph(); render();
+    updateUndoButton();
     if(d.affected&&d.affected.length) markAssessmentStale();
+      updateUndoButton();
   });
 }
 
@@ -810,6 +816,7 @@ async function runAssessment(){
     renderLeftBar();
     if(selectedNode) selectNode(selectedNode);   // refresh panel readings/signals
     layoutGraph(); render();
+    updateUndoButton();
   }catch(e){ alert("Assessment failed: "+e); }
   finally{ showAssessStatus(false); }
 }
@@ -826,5 +833,34 @@ async function loadNodeContext(nodeId){
   }catch(e){ el.textContent=""; }
 }
 
+
+// --- Undo ---
+function updateUndoButton(){
+  var btn=document.getElementById("btn-undo");
+  if(!btn) return;
+  fetch("/builder/undo-state").then(function(r){return r.json();}).then(function(d){
+    btn.disabled=!d.can_undo;
+    btn.title=d.can_undo?("Undo: "+d.last_action):"Nothing to undo";
+  }).catch(function(){});
+}
+
+function undo(){
+  fetch("/builder/undo",{method:"POST"}).then(function(r){
+    if(!r.ok){ alert("Nothing to undo"); return; }
+    return r.json();
+  }).then(function(d){
+    if(!d) return;
+    loadGraph();  // full refresh: re-fetch graph, re-layout, re-render
+    closePanel();
+    updateUndoButton();
+  });
+}
+
+// Ctrl+Z / Cmd+Z keyboard shortcut
+document.addEventListener("keydown",function(e){
+  if((e.ctrlKey||e.metaKey)&&e.key==="z"&&!e.target.closest("input,textarea,select")){
+    e.preventDefault(); undo();
+  }
+});
 
 function resetView(){ nodePositions={}; selectedNode=null; closePanel(); loadGraph(); }

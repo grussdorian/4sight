@@ -38,6 +38,8 @@ h1,h2,h3,h4{font-family:"Space Grotesk",system-ui,sans-serif;letter-spacing:-0.0
 .tools button:hover{border-color:var(--primary);}
 .tools .primary{background:var(--primary);color:#fff;border-color:var(--primary);}
 .tools .primary:hover{background:#1d4ed8;}
+#btn-undo:disabled{opacity:0.35;cursor:default;}
+#btn-undo:disabled:hover{border-color:var(--line);}
 .tools .primary:disabled{opacity:0.6;cursor:default;}
 #assess-note{display:none;color:#b45309;font-size:12px;}
 

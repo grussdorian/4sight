@@ -61,6 +61,24 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
     # the first request that needs it, and on data changes.
     _boot = {"assessed": False}
     _dirty = set()   # node ids edited since the last assessment
+    _undo_stack: list[dict] = []   # {type, description, data} for reversing mutations
+
+    def _push_undo(typ: str, desc: str, data: dict) -> None:
+        """Record a reversible action before the mutation is applied. The data
+        dict must contain everything needed to restore the prior state."""
+        MAX_UNDO = 20
+        _undo_stack.append({"type": typ, "description": desc, "data": data})
+        if len(_undo_stack) > MAX_UNDO:
+            _undo_stack.pop(0)
+
+    def _clear_edit_undo(node_id: str) -> None:
+        """When a node is mutated twice in a row, replace the earlier edit-undo
+        rather than stacking two edits of the same node (the first is stale)."""
+        for i in range(len(_undo_stack) - 1, -1, -1):
+            a = _undo_stack[i]
+            if a["type"] == "edit_node" and a["data"].get("id") == node_id:
+                _undo_stack.pop(i)
+                break
 
     def _assess_all():
         """Re-assess only the nodes affected by a change: refresh readings, find
@@ -310,11 +328,19 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
         node = store.get_node(node_id)
         if not node.data_binding:
             return {"error": "not a leaf node"}
+        old_values = dict(node.data_binding.raw_values)
+        changed_fields = []
         for field, value in (body.get("readings") or {}).items():
             if value is None:
                 continue
             set_metric(conn, node_id, field, float(value))
             node.data_binding.raw_values[field] = float(value)
+            if old_values.get(field) != float(value):
+                changed_fields.append(field)
+        if changed_fields:
+            _push_undo("set_readings", f"Readings for {node.title}",
+                       {"node_id": node_id, "old_values": old_values,
+                        "changed_fields": changed_fields})
         _dirty.add(node_id)   # re-score this node's cone on the next assessment
         _persist()
         return {"node_id": node_id, "raw_values": node.data_binding.raw_values}
@@ -521,11 +547,18 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
                 if old.data_binding:
                     binding.raw_values = dict(old.data_binding.raw_values)
         is_new = nid not in store.nodes
+        if is_new:
+            _push_undo("create_node", f"Created {body.get('title', nid)}",
+                       {"id": nid})
+        else:
+            old = store.get_node(nid)
+            _clear_edit_undo(nid)
+            _push_undo("edit_node", f"Edited {old.title}",
+                       {"id": nid, "old": old.model_dump(mode="json")})
         node = Node(id=nid, kind=kind, title=body.get("title", nid),
                     description=body.get("description", ""),
                     data_binding=binding)
         if not is_new:
-            old = store.get_node(nid)
             node.delta_accumulator = old.delta_accumulator
             node.pending_delta = old.pending_delta
             node.current = old.current
@@ -546,6 +579,14 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
         if node_id not in store.nodes:
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=404, content={"error": "not found"})
+        old_node = store.get_node(node_id)
+        # Record undo BEFORE removing edges (so we can restore everything).
+        connected_edges = [{"src": e.src, "dst": e.dst, "type": e.type.value,
+                            "weight": e.weight.value}
+                          for e in store._edges
+                          if e.src == node_id or e.dst == node_id]
+        _push_undo("delete_node", f"Deleted {old_node.title}",
+                   {"node": old_node.model_dump(mode="json"), "edges": connected_edges})
         # Capture the deleted node's downstream cone BEFORE removing edges,
         # so the next assessment only re-scores the affected lineage.
         affected = set(store.influence_successors(node_id))
@@ -573,6 +614,10 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
             weight = Severity.MEDIUM
         try:
             store.add_edge(body["src"], body["dst"], EdgeType(body["type"]), weight)
+            src_title = store.get_node(body["src"]).title if body["src"] in store.nodes else body["src"]
+            dst_title = store.get_node(body["dst"]).title if body["dst"] in store.nodes else body["dst"]
+            _push_undo("create_edge", f"Edge {src_title} → {dst_title}",
+                       {"src": body["src"], "dst": body["dst"], "type": body["type"]})
             _persist()
             return {"src": body["src"], "dst": body["dst"], "type": body["type"], "weight": weight.value}
         except ValueError as exc:
@@ -592,6 +637,108 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
             store._infl.remove_edge(u, v)
         _persist()
         return {"deleted": True}
+
+    @app.get("/builder/undo-state")
+    def undo_state():
+        """Returns whether there is an action that can be undone, and what it is."""
+        if _undo_stack:
+            last = _undo_stack[-1]
+            return {"can_undo": True, "last_action": last["description"]}
+        return {"can_undo": False, "last_action": None}
+
+    @app.post("/builder/undo")
+    def undo_last():
+        """Reverse the most recent reversible action (create/delete node,
+        create edge, edit node, set readings). Returns what was undone."""
+        if not _undo_stack:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=400, content={"error": "nothing to undo"})
+        action = _undo_stack.pop()
+        typ = action["type"]
+        data = action["data"]
+
+        if typ == "create_node":
+            # Reverse: delete the created node and any edges created alongside it
+            nid = data["id"]
+            if nid in store.nodes:
+                store._edges = [e for e in store._edges
+                               if e.src != nid and e.dst != nid]
+                store._infl.remove_node(nid)
+                del store.nodes[nid]
+            _dirty.discard(nid)
+            _persist()
+
+        elif typ == "delete_node":
+            # Reverse: restore the deleted node and all its edges
+            node = Node(**data["node"]) if isinstance(data["node"], dict) else data["node"]
+            store.add_node(node)
+            for edge_data in data.get("edges", []):
+                try:
+                    store.add_edge(edge_data["src"], edge_data["dst"],
+                                   EdgeType(edge_data["type"]),
+                                   Severity(edge_data.get("weight", "medium")))
+                except ValueError:
+                    pass  # skip edges that would create cycles (shouldn't happen)
+            _dirty.add(node.id)
+            _persist()
+
+        elif typ == "create_edge":
+            # Reverse: delete the created edge
+            src, dst, etype = data["src"], data["dst"], EdgeType(data["type"])
+            store._edges = [e for e in store._edges
+                           if not (e.src == src and e.dst == dst and e.type == etype)]
+            if etype == EdgeType.DECOMPOSITION:
+                u, v = dst, src
+            else:
+                u, v = src, dst
+            if store._infl.has_edge(u, v):
+                store._infl.remove_edge(u, v)
+            _dirty.add(dst)
+            _persist()
+
+        elif typ == "edit_node":
+            # Reverse: restore the old node state
+            old_data = data.get("old", {})
+            nid = old_data.get("id", data.get("id"))
+            if nid in store.nodes:
+                old_node = Node(**old_data) if isinstance(old_data, dict) else old_data
+                # Preserve runtime state that shouldn't be rolled back
+                cur = store.get_node(nid)
+                old_node.current = cur.current
+                old_node.history = cur.history
+                old_node.report = cur.report
+                old_node.inbound_signals = cur.inbound_signals
+                old_node.outbound_signal = cur.outbound_signal
+                old_node.delta_accumulator = cur.delta_accumulator
+                old_node.pending_delta = cur.pending_delta
+                old_node.raw = cur.raw
+                old_node.pending_change = cur.pending_change
+                store.add_node(old_node)
+            _dirty.add(nid)
+            _persist()
+
+        elif typ == "set_readings":
+            # Reverse: restore the old raw_values
+            nid = data["node_id"]
+            old_values = data.get("old_values", {})
+            if nid in store.nodes:
+                node = store.get_node(nid)
+                if node.data_binding:
+                    node.data_binding.raw_values = dict(old_values)
+                    # Also revert the leaf_metrics table to match
+                    for field in data.get("changed_fields", []):
+                        from .db import set_metric
+                        old_val = old_values.get(field)
+                        if old_val is not None:
+                            set_metric(conn, nid, field, float(old_val))
+            _dirty.add(nid)
+            _persist()
+
+        else:
+            # Unknown action type — shouldn't happen
+            pass
+
+        return {"undone": typ, "description": action["description"]}
 
     @app.get("/builder/graph")
     def get_builder_graph():
