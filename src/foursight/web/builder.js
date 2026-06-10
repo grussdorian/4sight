@@ -90,15 +90,20 @@ function onWheel(e){
 
 var ROOT_ID=null;
 async function loadGraph(){
-  var r=await fetch("/builder/graph?role="+currentRole); var d=await r.json();
-  d.nodes.forEach(function(n){graph.nodes[n.id]=n;});
-  graph.edges=d.edges.map(function(e){return {src:e.src, dst:e.dst, type:e.type, weight:e.weight||"medium"};});
-  if(Object.keys(nodePositions).length===0){
-    layoutGraph();
-  }
-  try{ ROOT_ID=(await (await fetch("/root?role="+currentRole)).json()).node_id; }catch(e){}
-  renderLeftBar();
-  render();
+  try{
+    var r=await fetch("/builder/graph?role="+currentRole);
+    if(!r.ok){ console.error("loadGraph fetch failed",r.status); return; }
+    var d=await r.json();
+    if(!d.nodes||!d.nodes.length){ console.error("loadGraph: no nodes returned"); return; }
+    d.nodes.forEach(function(n){graph.nodes[n.id]=n;});
+    graph.edges=(d.edges||[]).map(function(e){return {src:e.src, dst:e.dst, type:e.type, weight:e.weight||"medium"};});
+    if(Object.keys(nodePositions).length===0){
+      layoutGraph();
+    }
+    try{ ROOT_ID=(await (await fetch("/root?role="+currentRole)).json()).node_id; }catch(e){}
+    renderLeftBar();
+    render();
+  }catch(e){ console.error("loadGraph error:",e); }
 }
 
 // ===== Tabs =====
@@ -761,7 +766,7 @@ function saveReadings(){
   document.querySelectorAll("#panel-readings .reading-input").forEach(function(inp){
     var v=parseFloat(inp.value); if(!isNaN(v)) readings[inp.getAttribute("data-field")]=v;
   });
-  fetch("/node/"+selectedNode+"/readings?role="+currentRole",{method:"POST",headers:{"Content-Type":"application/json"},
+  fetch("/node/"+selectedNode+"/readings?role="+currentRole,{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({readings:readings})})
     .then(function(r){return r.json();}).then(function(d){
       if(graph.nodes[selectedNode]) graph.nodes[selectedNode].raw_values=d.raw_values;
