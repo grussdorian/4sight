@@ -31,8 +31,26 @@ class FakeLLM:
     def verify_score(self, node, rule_score, rule_inputs, grounding) -> LLMVerdict:
         score, adjusted = rule_score, False
         rationale = f"Rule score {rule_score:.0f} for {node.title}."
+
+        # If there are unstructured (qualitative) fields, treat them as active
+        # concerns only when there is actual data (effect_score from inject) or
+        # a positive rule_score. A quiet qualitative leaf scores 0.
+        unstructured = rule_inputs.get("unstructured_fields", [])
+        if unstructured:
+            eff = float(node.data_binding.raw_values.get("effect_score", 0)) if node.data_binding else 0.0
+            if eff > 0:
+                score = max(score, eff)
+                adjusted = True
+                rationale = f"Qualitative concern: {', '.join(unstructured)}. " + rationale
+            elif rule_score > 0:
+                score = rule_score
+                adjusted = True
+                rationale = f"Unstructured fields ({len(unstructured)}) present. " + rationale
+            # else: no active data — score stays at 0 (the leaf is quiet)
+
         if rule_inputs.get("single_owner"):
-            score, adjusted = max(score, 85.0), True
+            score = max(score, 85.0)
+            adjusted = True
             rationale = "Single-owner dependency raises severity. " + rationale
         return LLMVerdict(final_score=score, severity=severity_from_score(score),
                           rationale=rationale, adjusted=adjusted, model=self.model)

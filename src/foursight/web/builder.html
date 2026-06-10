@@ -64,8 +64,10 @@
           <textarea id="panel-query" placeholder="SQL or file path"></textarea>
           <button onclick="testQuery()" class="mini-btn teal">Run query (test)</button>
           <div id="query-test-result" class="hint"></div>
-          <label>Current readings (editable -- changing a value injects a problem)</label>
-          <div id="panel-readings"></div>
+          <div id="panel-readings-section">
+            <label id="panel-readings-label">Current readings (editable -- changing a value injects a problem)</label>
+            <div id="panel-readings"></div>
+          </div>
         </div>
         <label>Description</label>
         <textarea id="panel-desc" placeholder="Describe this task"></textarea>

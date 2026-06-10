@@ -606,6 +606,8 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
             if old.data_binding and not binding:
                 node.data_binding = old.data_binding
         store.add_node(node)
+        if not is_new:
+            _dirty.add(nid)  # edited nodes need re-assessment
         _persist()
         return {"id": nid, "deduped": False}
 

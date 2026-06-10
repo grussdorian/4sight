@@ -532,6 +532,7 @@ async function saveNodePanel(){
     }
     layoutGraph(); render();
     updateUndoButton();
+    if(!creatingKind) markAssessmentStale();  // re-assessment needed for existing nodes
   });
 }
 
@@ -684,6 +685,19 @@ function selectNode(nid){
     // Surface the SQL query for data-source (leaf) nodes.
     document.getElementById("panel-adapter").value=d.adapter_id||"";
     document.getElementById("panel-query").value=d.query||"";
+    // Qualitative leaves (no SQL query): show field rules, hide raw readings + query.
+    var isQualitative=(d.kind==="leaf"&&!d.query);
+    var rsec=document.getElementById("panel-readings-section");
+    var qsec=document.getElementById("panel-leaf-fields");
+    if(isQualitative){
+      if(rsec) rsec.style.display="none";
+      if(qsec) qsec.style.display="block";
+      document.getElementById("panel-readings-label").textContent="Qualitative Risk Factors";
+    }else{
+      if(rsec) rsec.style.display=(d.kind==="leaf"?"block":"none");
+      if(qsec) qsec.style.display=(d.kind==="leaf"?"block":"none");
+      document.getElementById("panel-readings-label").textContent="Current Readings";
+    }
     renderReadings(d.raw_values||{});
     renderFieldRules(d.field_rules||[]);
     renderSignals(d.inbound_signals||[], d.outbound_signal);

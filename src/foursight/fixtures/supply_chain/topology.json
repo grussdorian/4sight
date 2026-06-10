@@ -3,7 +3,7 @@
     {"id": "fab17_output", "kind": "task", "title": "Fab 17 Output", "description": "Overall semiconductor fabrication output for Fab 17. Aggregates engineering, supply chain, and workforce risk."},
     {"id": "eng_ops", "kind": "task", "title": "Engineering Operations", "description": "Lithography and packaging lines. Depends on logistics for material availability."},
     {"id": "lithography", "kind": "task", "title": "Lithography Line", "description": "Wafer lithography process. Depends on SUMCO silicon yield rates and Alice Chen as process lead."},
-    {"id": "alice_chen", "kind": "leaf", "title": "Alice Chen, Process Lead", "sensitivity": "confidential", "description": "Senior process lead for lithography calibration. Single point of failure for yield tuning."},
+    {"id": "alice_chen", "kind": "leaf", "title": "Alice Chen, Process Lead", "sensitivity": "confidential", "description": "Senior process lead for lithography calibration. Single point of failure for yield tuning.", "field_rules": [{"field": "Taking leave", "kind": "unstructured", "severity_on_breach": "high"}, {"field": "Health reason", "kind": "unstructured", "severity_on_breach": "critical"}, {"field": "Payroll error", "kind": "unstructured", "severity_on_breach": "medium"}, {"field": "Other", "kind": "unstructured", "severity_on_breach": "medium"}]},
     {"id": "packaging", "kind": "task", "title": "Packaging Line", "description": "Chip packaging and testing. Depends on shift supervisor Bob Taylor for smooth operations."},
     {"id": "supply_chain", "kind": "task", "title": "Supply Chain", "description": "End-to-end supply chain: wafer procurement, logistics, and buffer inventory."},
     {"id": "wafer_suppliers", "kind": "task", "title": "Wafer Suppliers", "description": "Aggregates risk across three wafer sources: TSMC, GlobalFoundries, and SUMCO. Declassifies confidential inputs."},
@@ -18,7 +18,7 @@
     {"id": "buffer_warehouse", "kind": "task", "title": "Buffer Warehouse", "description": "Safety stock of critical wafers and substrates. Stock levels below 30 percent are a concern."},
     {"id": "buffer_stock", "kind": "leaf", "title": "Buffer Stock Level", "sensitivity": "confidential", "description": "Current buffer stock as percentage of target. Below 30 percent triggers replenishment alert.", "threshold_rules": [{"field": "stock_pct", "operator": "<", "value": 30}]},
     {"id": "workforce", "kind": "task", "title": "Workforce", "description": "Fab personnel: shift supervisors and maintenance crews."},
-    {"id": "bob_taylor", "kind": "leaf", "title": "Bob Taylor, Shift Supervisor", "sensitivity": "confidential", "description": "Night shift supervisor for packaging line. Single point of failure for after-hours operations."},
+    {"id": "bob_taylor", "kind": "leaf", "title": "Bob Taylor, Shift Supervisor", "sensitivity": "confidential", "description": "Night shift supervisor for packaging line. Single point of failure for after-hours operations.", "field_rules": [{"field": "Taking leave", "kind": "unstructured", "severity_on_breach": "high"}, {"field": "Health reason", "kind": "unstructured", "severity_on_breach": "critical"}, {"field": "Payroll error", "kind": "unstructured", "severity_on_breach": "medium"}, {"field": "Other", "kind": "unstructured", "severity_on_breach": "medium"}]},
     {"id": "maint_crew", "kind": "leaf", "title": "Maintenance Crew", "sensitivity": "internal", "description": "Preventive maintenance crew. Staffing levels below 60 percent risk equipment downtime."}
   ],
   "edges": [

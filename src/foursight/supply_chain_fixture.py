@@ -26,12 +26,6 @@ LEAF_SPECS: dict[str, dict] = {
     "buffer_stock":  {"field": "stock_pct",   "direction": "low",
                       "bands": {Severity.CRITICAL: 15, Severity.HIGH: 25, Severity.MEDIUM: 30},
                       "baseline": 70.0},
-    "alice_chen":    {"field": "capacity_pct", "direction": "low",
-                      "bands": {Severity.CRITICAL: 40, Severity.HIGH: 60, Severity.MEDIUM: 80},
-                      "baseline": 95.0},
-    "bob_taylor":    {"field": "capacity_pct", "direction": "low",
-                      "bands": {Severity.CRITICAL: 40, Severity.HIGH: 60, Severity.MEDIUM: 80},
-                      "baseline": 90.0},
     "maint_crew":    {"field": "staffing_pct", "direction": "low",
                       "bands": {Severity.CRITICAL: 40, Severity.HIGH: 60},
                       "baseline": 85.0},
@@ -62,17 +56,52 @@ def parse_supply_chain(path: str | Path = FIXTURES) -> SupplyChainSpec:
         kind = NodeKind(n["kind"])
         binding = None
         if kind == NodeKind.LEAF:
-            spec = LEAF_SPECS.get(n["id"])
-            if spec:
-                field_rules = graded_field_rules(
-                    spec["field"], spec["direction"], spec["bands"]
-                ) + generic_effect_score_rules()
+            # Parse explicit field_rules from topology JSON first (qualitative leaves).
+            raw_frs = n.get("field_rules", [])
+            if raw_frs:
+                from .models import FieldRule
+                explicit_rules = []
+                for fr in raw_frs:
+                    explicit_rules.append(FieldRule(
+                        field=fr["field"],
+                        kind=fr.get("kind", "structured"),
+                        operator=fr.get("operator", "<"),
+                        expected=float(fr.get("expected", 0)),
+                        severity_on_breach=Severity(fr.get("severity_on_breach", "medium")),
+                    ))
+                # Qualitative leaves (only unstructured rules) get NO SQL query.
+                # Mixed or structured rules can co-exist with a query.
+                query = leaf_query(n["id"]) if n["id"] in LEAF_SPECS else ""
+                binding = DataBinding(adapter_id=n["id"],
+                                      query=query,
+                                      sensitivity=Sensitivity(n.get("sensitivity", "internal")),
+                                      field_rules=explicit_rules)
             else:
-                field_rules = generic_effect_score_rules()
-            binding = DataBinding(adapter_id=n["id"],
-                                  query=leaf_query(n["id"]),
-                                  sensitivity=Sensitivity(n.get("sensitivity", "internal")),
-                                  field_rules=field_rules)
+                spec = LEAF_SPECS.get(n["id"])
+                if spec:
+                    field_rules = graded_field_rules(
+                        spec["field"], spec["direction"], spec["bands"]
+                    ) + generic_effect_score_rules()
+                else:
+                    # Backward compat: convert old threshold_rules if present.
+                    raw_trs = n.get("threshold_rules", [])
+                    if raw_trs:
+                        from .models import FieldRule
+                        field_rules = []
+                        for tr in raw_trs:
+                            op = tr.get("operator", "<")
+                            val = float(tr.get("value", 0))
+                            sev = Severity.HIGH  # old rules used HIGH implicitly
+                            field_rules.append(FieldRule(
+                                field=tr["field"], kind="structured",
+                                operator=op, expected=val,
+                                severity_on_breach=sev))
+                    else:
+                        field_rules = generic_effect_score_rules()
+                binding = DataBinding(adapter_id=n["id"],
+                                      query=leaf_query(n["id"]),
+                                      sensitivity=Sensitivity(n.get("sensitivity", "internal")),
+                                      field_rules=field_rules)
         nodes.append(Node(id=n["id"], kind=kind, title=n["title"],
                           description=n.get("description", ""),
                           data_binding=binding, raw={} if kind == NodeKind.LEAF else None))
