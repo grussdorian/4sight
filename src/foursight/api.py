@@ -514,9 +514,29 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
             existing = store.find_duplicate_source(binding)
             if existing:
                 return {"id": existing, "deduped": True}
+            # Preserve existing readings so a field-rule edit doesn't lose the
+            # leaf's current data values (which live in DB + raw_values).
+            if nid in store.nodes:
+                old = store.get_node(nid)
+                if old.data_binding:
+                    binding.raw_values = dict(old.data_binding.raw_values)
+        is_new = nid not in store.nodes
         node = Node(id=nid, kind=kind, title=body.get("title", nid),
                     description=body.get("description", ""),
                     data_binding=binding)
+        if not is_new:
+            old = store.get_node(nid)
+            node.delta_accumulator = old.delta_accumulator
+            node.pending_delta = old.pending_delta
+            node.current = old.current
+            node.history = old.history
+            node.report = old.report
+            node.inbound_signals = old.inbound_signals
+            node.outbound_signal = old.outbound_signal
+            node.raw = old.raw
+            node.pending_change = old.pending_change
+            if old.data_binding and not binding:
+                node.data_binding = old.data_binding
         store.add_node(node)
         _persist()
         return {"id": nid, "deduped": False}
