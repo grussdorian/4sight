@@ -132,7 +132,10 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
 
     def _persist():
         if persist:
-            save_graph(store, conn)
+            try:
+                save_graph(store, conn)
+            except Exception:
+                pass   # a transient DB write issue must not fail the request
 
     app = FastAPI(title="4sight")
     app.state.sockets = []
