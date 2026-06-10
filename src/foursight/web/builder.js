@@ -781,10 +781,11 @@ function closePanel(){
 function deleteSelectedNode(){
   if(!selectedNode) return;
   if(!confirm("Delete node "+selectedNode+"?")) return;
-  fetch("/builder/nodes/"+selectedNode,{method:"DELETE"}).then(function(){
+  fetch("/builder/nodes/"+selectedNode,{method:"DELETE"}).then(function(r){return r.json();}).then(function(d){
     delete graph.nodes[selectedNode]; delete nodePositions[selectedNode];
     graph.edges=graph.edges.filter(function(e){return e.src!==selectedNode&&e.dst!==selectedNode;});
     closePanel(); layoutGraph(); render();
+    if(d.affected&&d.affected.length) markAssessmentStale();
   });
 }
 

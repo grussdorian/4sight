@@ -543,13 +543,26 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
 
     @app.delete("/builder/nodes/{node_id}")
     def delete_node(node_id: str):
-        if node_id in store.nodes:
-            store._edges = [e for e in store._edges
-                           if e.src != node_id and e.dst != node_id]
-            store._infl.remove_node(node_id)
-            del store.nodes[node_id]
+        if node_id not in store.nodes:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=404, content={"error": "not found"})
+        # Capture the deleted node's downstream cone BEFORE removing edges,
+        # so the next assessment only re-scores the affected lineage.
+        affected = set(store.influence_successors(node_id))
+        affected.discard(node_id)
+        store._edges = [e for e in store._edges
+                       if e.src != node_id and e.dst != node_id]
+        store._infl.remove_node(node_id)
+        del store.nodes[node_id]
+        # Also include nodes whose outbound signal referenced the deleted node
+        # (they now have stale cached signals).
+        for nid in list(affected):
+            node = store.get_node(nid)
+            node.outbound_signal = None
+            node.inbound_signals = []
+        _dirty.update(affected)
         _persist()
-        return {"deleted": node_id}
+        return {"deleted": node_id, "affected": sorted(affected)}
 
     @app.post("/builder/edges")
     def create_edge(body: dict):
