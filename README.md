@@ -27,26 +27,38 @@ cp .env.example .env
 pytest
 ```
 
-## Run the mock server
+## Run the app (Fab 17 demo)
+
+The real app serves the Fab 17 semiconductor supply-chain graph from the
+committed SQLite demo DB (`foursight.db`). It uses real DeepSeek scoring when
+`DEEPSEEK_API_KEY` is set in `.env`, and the deterministic FakeLLM otherwise:
+
+```
+uvicorn foursight.demo:app --port 8000
+# open http://localhost:8000
+```
+
+A fresh in-memory variant (no persistence, re-seeded from the supply-chain
+fixture on each boot) is available via the app factory and also serves Fab 17:
+
+```
+uvicorn foursight.api:build_app --factory --reload --port 8000
+```
+
+To explore the UI against lightweight fakes only (no LLM, no DB):
 
 ```
 uvicorn foursight.mock_server:app --port 8001
-# open http://localhost:8001
-```
-
-## Run the real app
-
-```
-uvicorn foursight.api:build_app --factory --reload
-# open http://localhost:8000
 ```
 
 ## Demo script
 
-Two acts, both driven from the web UI or via `POST /simulate-change`:
+Driven from the web UI (Builder and Report tabs):
 
-1. **Leave act:** key owner files leave, leaf change propagates, root report flips medium to high, traceable to the Leave Calendar origin.
-2. **Sensitivity act:** a salary hike fires through the redacted payroll adapter; budget effect is visible to reviewers but the source figure stays hidden. Switch the role selector to privileged to see the full report.
+1. **Qualitative human risk:** as privileged, open Alice Chen (a confidential human leaf), add a qualitative rule `Taking leave -> critical`, and Run Assessment. Alice goes critical and the risk propagates up Lithography and Packaging to the Fab 17 root. As a reviewer her underlying data is redacted to severity only.
+2. **Structured data change:** edit a data-source reading (e.g. SUMCO yield drops to 40), Run Assessment, and watch the affected cone re-score while unrelated branches hold steady; the root report traces each driver back to its origin.
+
+Telegram alerts: set `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in `.env` to get a push whenever the Fab 17 root severity escalates.
 
 ## Project structure
 
@@ -64,23 +76,23 @@ src/foursight/
 ├── assess.py           # Node assessment: leaf field rules + LLM, non-leaf weighted signal synthesis
 ├── propagation.py      # Topological crawl (every changed signal propagates in demo mode)
 ├── reports.py          # Per-node cached reports + trace-to-source
-├── seed.py             # build_seed() + load_company()
+├── seed.py             # load_supply_chain() (Fab 17) + legacy build_seed()/load_company()
+├── notify.py           # Telegram push on root-severity escalation
 ├── testkit.py          # Random DAG generator
-├── api.py              # FastAPI app (injectable seams)
+├── api.py              # FastAPI app (injectable seams); default seed is Fab 17
 ├── mcp_server.py       # MCP tools over the store seam
-├── demo.py             # Demo entrypoint (load_company)
+├── demo.py             # Demo entrypoint (Fab 17 supply chain, persisted DB)
 ├── web/
-│   ├── index.html
-│   └── app.js
+│   ├── builder.html    # Two-tab UI: Builder canvas + Report
+│   ├── builder.js
+│   └── builder.css
 ├── ingestion/
 │   ├── base.py         # SourceAdapter ABC
 │   ├── csv_adapter.py  # CsvLeaveAdapter
 │   └── payroll_redacted.py  # PayrollRedactedAdapter
-└── fixtures/mock_company/
-    ├── topology.json   # 12 nodes, 13 edges
-    └── policies/
-        ├── bcp.md
-        └── leave_policy.md
+└── fixtures/
+    ├── supply_chain/   # Fab 17 demo: topology.json (20 nodes) + policies/
+    └── mock_company/   # legacy build_seed/load_company graph
 ```
 
 ## License

@@ -66,7 +66,7 @@ def test_medium_weight_preserves_max_propagation(llm, vector):
 # --- Bug #1 + #2: /builder/batch-assess runs and writes real Assessments ---
 
 def test_builder_batch_assess_endpoint_runs():
-    c = TestClient(build_app())  # default build_seed: leaves have field_rules
+    c = TestClient(build_app())  # default Fab 17 seed: leaves have field_rules
     r = c.post("/builder/batch-assess", json={"mode": "full"})
     assert r.status_code == 200, r.text
     assert "assessments" in r.json()

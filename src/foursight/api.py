@@ -86,7 +86,10 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
     from .triggers import TriggerEngine
     from .poll import PollService
     if seed_fn is None:
-        from .seed import build_seed as seed_fn
+        # Default to the Fab 17 supply-chain demo so every launch path (including
+        # `uvicorn foursight.api:build_app --factory`) shows the real example, not
+        # the legacy build_seed "Q3 Launch Readiness" toy graph.
+        from .seed import load_supply_chain as seed_fn
     if get_report_fn is None:
         from .reports import get_report as get_report_fn
     if trace_fn is None:
