@@ -153,6 +153,7 @@ class Node(BaseModel):
     inbound_signals: list[Signal] = Field(default_factory=list)
     outbound_signal: Optional[Signal] = None
     context_summary: str = ""   # cached LLM summary of Chroma vector hits
+    mitigation: str = ""        # LLM-generated mitigation (non-leaf, severity != LOW)
 
 
 class Edge(BaseModel):

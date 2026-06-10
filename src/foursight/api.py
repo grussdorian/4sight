@@ -98,6 +98,11 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
 
         if getattr(getattr(eng, "llm", None), "model", "fake") == "fake":
             eng.run_crawl(list(dirty), TriggerType.NODE_FIRED)
+            try:
+                from .flatten import generate_mitigations
+                generate_mitigations(store, eng.llm, eng.vector, list(scope))
+            except Exception:
+                pass
         else:
             from .flatten import FlattenEngine, assessment_from_batch, input_snapshot, history_match
             from .reports import static_report
@@ -109,6 +114,11 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
                 entries = flat.parse_batch_response(raw)
             except Exception:
                 eng.run_crawl(list(dirty), TriggerType.NODE_FIRED)   # deterministic fallback
+                try:
+                    from .flatten import generate_mitigations
+                    generate_mitigations(store, eng.llm, eng.vector, list(scope))
+                except Exception:
+                    pass
                 _dirty.clear()
                 _boot["assessed"] = True
                 _persist()
@@ -154,6 +164,12 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
                                    node.current.llm_verdict.rationale)
                 except Exception:
                     continue
+            # Generate mitigations for non-leaf nodes at risk (severity != LOW).
+            try:
+                from .flatten import generate_mitigations
+                generate_mitigations(store, eng.llm, eng.vector, list(scope))
+            except Exception:
+                pass
         _dirty.clear()
         _boot["assessed"] = True
         _persist()
@@ -389,6 +405,24 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
             node.context_summary = summarizer.summarize(node, chunks)
         return {"node_id": node_id, "summary": node.context_summary}
 
+    @app.get("/node/{node_id}/mitigation")
+    def node_mitigation(node_id: str):
+        """Lazily generate (and cache) a mitigation suggestion for a non-leaf
+        node whose severity is not LOW. Grounded in vector search over policies."""
+        if node_id not in store.nodes:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=404, content={"error": "not found"})
+        node = store.get_node(node_id)
+        if node.kind == NodeKind.LEAF:
+            return {"node_id": node_id, "mitigation": ""}
+        if node.current is None or node.current.llm_verdict.severity == Severity.LOW:
+            node.mitigation = ""
+            return {"node_id": node_id, "mitigation": ""}
+        if not node.mitigation:
+            from .flatten import generate_mitigations
+            generate_mitigations(store, eng.llm, eng.vector, [node_id])
+        return {"node_id": node_id, "mitigation": node.mitigation}
+
     @app.get("/graph-data")
     def graph_data(role: str = "reviewer"):
         _ensure_assessed()
@@ -492,6 +526,7 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
             "inputs": store.influence_predecessors(node_id),
             "consumers": store.influence_successors(node_id),
             "context_summary": node.context_summary,
+            "mitigation": node.mitigation,
             "severity": node.current.llm_verdict.severity.value if node.current else None,
             "adapter_id": node.data_binding.adapter_id if node.data_binding else "",
             "query": node.data_binding.query if node.data_binding else "",
@@ -752,6 +787,7 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
                 "delta_accumulator": n.delta_accumulator,
                 "field_rules": [fr.model_dump(mode="json") for fr in (n.data_binding.field_rules if n.data_binding else [])],
                 "raw_values": n.data_binding.raw_values if n.data_binding else {},
+                "mitigation": n.mitigation,
                 "outbound_signal": n.outbound_signal.model_dump(mode="json") if n.outbound_signal else None,
             })
         edges = [{"src": e.src, "dst": e.dst, "type": e.type.value, "weight": e.weight.value}

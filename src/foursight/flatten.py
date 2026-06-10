@@ -261,3 +261,77 @@ class FlattenEngine:
         if objs:
             return objs
         raise ValueError("no parseable assessments in batch response")
+
+
+def generate_mitigations(store, llm, vector, node_ids: list[str]) -> None:
+    """For each non-leaf node whose current severity is not LOW, generate a
+    concise mitigation suggestion grounded in the vector store's policy docs.
+    Nodes at LOW severity have their mitigation cleared (the risk has passed).
+    Leaf nodes are skipped (mitigations don't apply to raw data sources)."""
+    from .models import NodeKind, Severity
+    candidates = []
+    for nid in node_ids:
+        if nid not in store.nodes:
+            continue
+        node = store.get_node(nid)
+        if node.kind == NodeKind.LEAF:
+            continue
+        if node.current is None:
+            continue
+        sev = node.current.llm_verdict.severity
+        if sev == Severity.LOW:
+            node.mitigation = ""
+            continue
+        candidates.append(node)
+
+    if not candidates:
+        return
+
+    # Build a batch prompt: one block per node with its severity, cause, and
+    # relevant policy context from the vector store.
+    blocks = []
+    for node in candidates:
+        chunks = []
+        if vector is not None:
+            try:
+                chunks = vector.query_texts(
+                    f"mitigation {node.title} {node.current.llm_verdict.rationale}", k=1)
+            except Exception:
+                pass
+        ctx = chunks[0].replace("\n", " ").strip()[:300] if chunks else "no relevant policy found"
+        blocks.append(
+            f"Node: {node.title} (id={node.id})\n"
+            f"Severity: {node.current.llm_verdict.severity.value}\n"
+            f"Cause: {node.current.llm_verdict.rationale}\n"
+            f"Policy context: {ctx}"
+        )
+
+    system = (
+        "You are a risk mitigation advisor for a semiconductor supply chain. "
+        "For each node below, suggest ONE concrete, actionable mitigation step "
+        "grounded in the provided policy context. Keep each suggestion to one "
+        "sentence (max 20 words). If the policy context suggests a specific "
+        "action, use it. If not, suggest a general industry best practice."
+    )
+    prompt = (
+        "For each node, return a JSON object with node_id and mitigation "
+        "(a single sentence). Reply with ONLY a compact JSON array.\n\n"
+        + "\n---\n".join(blocks)
+    )
+
+    try:
+        raw = llm.batch_assess(system, prompt)
+    except Exception:
+        return  # mitigation is best-effort; failure is silent
+
+    import json as _json
+    try:
+        parsed = _json.loads(raw)
+        if isinstance(parsed, list):
+            for entry in parsed:
+                nid = entry.get("node_id")
+                mit = entry.get("mitigation", "")
+                if nid in store.nodes and mit:
+                    store.get_node(nid).mitigation = str(mit)
+    except (_json.JSONDecodeError, Exception):
+        pass

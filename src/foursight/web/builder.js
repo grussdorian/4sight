@@ -155,6 +155,8 @@ async function renderReport(){
   var sev=d.severity||"none";
   var ctx="";
   if(!d.query){ try{ ctx=(await (await fetch("/node/"+nid+"/context")).json()).summary; }catch(e){} }
+  var mit=d.mitigation||"";
+  if(!mit&&d.kind!=="leaf"&&sev!=="low"){ try{ mit=(await (await fetch("/node/"+nid+"/mitigation")).json()).mitigation||""; }catch(e){} }
   var drivers=(d.inputs||[]).map(function(id){
     var n=graph.nodes[id]||{}; var s=n.severity||"none";
     return "<div class='driver' onclick=\"reportNavigate('"+id+"')\">"+
@@ -174,6 +176,7 @@ async function renderReport(){
       "<span class='sev-pill' style='background:"+SEVC[sev]+"'>"+sev+"</span></div>"+
     (d.description?"<div class='rpt-row'><div class='k'>Description</div><div class='v'>"+esc(d.description)+"</div></div>":"")+
     (ctx?"<div class='rpt-row'><div class='k'>Context (vector + LLM)</div><div class='v'>"+esc(ctx)+"</div></div>":"")+
+    (mit?"<div class='rpt-row'><div class='k'>Suggested Mitigation</div><div class='v'>"+esc(mit)+"</div></div>":"")+
     (stats?"<div class='rpt-row'><div class='rpt-grid'>"+stats+"</div></div>":"")+
     "<div class='rpt-row'><div class='k'>Drivers (what feeds this node)</div>"+
       (drivers||"<div class='rpt-empty'>No upstream drivers (leaf data source).</div>")+"</div></div>";
@@ -704,6 +707,14 @@ function selectNode(nid){
       section.style.display="block";
       loadNodeContext(nid);
     }
+    // Load mitigation for task nodes with risk
+    var ms=document.getElementById("panel-mitigation-section");
+    if(d.kind!=="leaf"&&d.severity&&d.severity!=="low"){
+      if(ms) ms.style.display="block";
+      loadNodeMitigation(nid);
+    }else{
+      if(ms) ms.style.display="none";
+    }
   }).catch(function(){});
   render();
 }
@@ -831,6 +842,21 @@ async function loadNodeContext(nodeId){
     var d=await r.json();
     el.textContent=d.summary||"No context.";
   }catch(e){ el.textContent=""; }
+}
+
+async function loadNodeMitigation(nodeId){
+  var el=document.getElementById("panel-mitigation");
+  if(!el) return;
+  el.innerHTML="<span style='opacity:0.5;'>Loading mitigation...</span>";
+  try{
+    var r=await fetch("/node/"+nodeId+"/mitigation");
+    var d=await r.json();
+    if(d.mitigation){
+      el.innerHTML="<span style='color:var(--sev-high);font-weight:600;'>Suggested mitigation:</span> "+esc(d.mitigation);
+    }else{
+      el.innerHTML="";
+    }
+  }catch(e){ el.innerHTML=""; }
 }
 
 
