@@ -125,7 +125,15 @@ def test_typhoon_diamond_lithography_reaches_root_once():
 
 def test_alice_leave_bubbles_to_critical():
     c = _client()
-    _inject(c, "Leave Calendar", "alice_chen", 85, kind="leave")
+    # Alice is a qualitative leaf — add critical field rules so the LLM
+    # (or FakeLLM) produces a high score from the severity levels.
+    c.post("/builder/nodes", json={
+        "id": "alice_chen", "kind": "leaf", "title": "Alice Chen, Process Lead",
+        "field_rules": [
+            {"field": "Taking leave", "kind": "unstructured", "severity_on_breach": "critical"},
+        ]
+    })
+    c.post("/assess")
     root = c.get("/report/fab17_output", params={"role": "reviewer"}).json()
     assert root["severity"] in ("high", "critical")
     assert_trace(c, "fab17_output", "alice_chen")
@@ -175,7 +183,14 @@ def test_buffer_drain_medium():
 
 def test_supervisor_leave_cross_branch():
     c = _client()
-    _inject(c, "Leave Calendar", "bob_taylor", 60, kind="leave")
+    # Bob is a qualitative leaf — add high-severity field rules for the inject.
+    c.post("/builder/nodes", json={
+        "id": "bob_taylor", "kind": "leaf", "title": "Bob Taylor, Shift Supervisor",
+        "field_rules": [
+            {"field": "Taking leave", "kind": "unstructured", "severity_on_breach": "critical"},
+        ]
+    })
+    c.post("/assess")
     packaging = c.get("/report/packaging", params={"role": "reviewer"}).json()
     assert packaging is not None
     root = c.get("/report/fab17_output", params={"role": "reviewer"}).json()

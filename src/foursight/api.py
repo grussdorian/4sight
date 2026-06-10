@@ -647,6 +647,11 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
         store.add_node(node)
         if not is_new:
             _dirty.add(nid)  # edited nodes need re-assessment
+            node.pending_change = ChangeEvent(
+                source="builder", record_ref=nid,
+                after={"field_rules_edited": True},
+                at=datetime.now(timezone.utc),
+                sensitivity=Sensitivity.INTERNAL)
         _persist()
         return {"id": nid, "deduped": False}
 

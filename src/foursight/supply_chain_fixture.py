@@ -82,6 +82,7 @@ def parse_supply_chain(path: str | Path = FIXTURES) -> SupplyChainSpec:
                     field_rules = graded_field_rules(
                         spec["field"], spec["direction"], spec["bands"]
                     ) + generic_effect_score_rules()
+                    query = leaf_query(n["id"])
                 else:
                     # Backward compat: convert old threshold_rules if present.
                     raw_trs = n.get("threshold_rules", [])
@@ -91,15 +92,19 @@ def parse_supply_chain(path: str | Path = FIXTURES) -> SupplyChainSpec:
                         for tr in raw_trs:
                             op = tr.get("operator", "<")
                             val = float(tr.get("value", 0))
-                            sev = Severity.HIGH  # old rules used HIGH implicitly
+                            sev = Severity.HIGH
                             field_rules.append(FieldRule(
                                 field=tr["field"], kind="structured",
                                 operator=op, expected=val,
                                 severity_on_breach=sev))
+                        query = leaf_query(n["id"])
                     else:
-                        field_rules = generic_effect_score_rules()
+                        # Qualitative leaf: no query, no rules. Admin adds
+                        # unstructured field rules via the UI when needed.
+                        field_rules = []
+                        query = ""
                 binding = DataBinding(adapter_id=n["id"],
-                                      query=leaf_query(n["id"]),
+                                      query=query,
                                       sensitivity=Sensitivity(n.get("sensitivity", "internal")),
                                       field_rules=field_rules)
         nodes.append(Node(id=n["id"], kind=kind, title=n["title"],
