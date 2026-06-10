@@ -8,6 +8,50 @@ from .models import ChangeEvent, Sensitivity, Viewer, Role, Node, NodeKind, Edge
 
 WEB = Path(__file__).parent / "web"
 
+# Sensitivity threshold for redaction: reviewers see only INTERNAL and below;
+# PRIVILEGED sees everything.
+_ALLOWED = {Role.REVIEWER: Sensitivity.INTERNAL, Role.PRIVILEGED: Sensitivity.RESTRICTED}
+
+def _can_view(viewer_role: str, sensitivity: str) -> bool:
+    """True if a viewer with this role can see content at this sensitivity level."""
+    try:
+        r = Role(viewer_role)
+        s = Sensitivity(sensitivity)
+    except ValueError:
+        return True  # unknown role/sensitivity → don't redact (fail open for dev)
+    return _idx(s) <= _idx(_ALLOWED.get(r, Sensitivity.INTERNAL))
+
+def _idx(s: Sensitivity) -> int:
+    return [Sensitivity.PUBLIC, Sensitivity.INTERNAL,
+            Sensitivity.CONFIDENTIAL, Sensitivity.RESTRICTED].index(s)
+
+def _redact_cause(signal_dict: dict | None, role: str) -> dict | None:
+    """Redact a signal dict's cause text if the viewer's role lacks clearance."""
+    if signal_dict is None:
+        return None
+    sens = signal_dict.get("sensitivity", "internal")
+    if not _can_view(role, sens):
+        return {**signal_dict, "cause": f"[restricted — {sens}]"}
+    return signal_dict
+
+def _redact_mitigation(node, role: str) -> str:
+    """Redact mitigation if it was generated from confidential context."""
+    if not node.mitigation:
+        return ""
+    if node.data_binding and not _can_view(role, node.data_binding.sensitivity.value):
+        return f"[restricted — {node.data_binding.sensitivity.value}]"
+    if node.current and not _can_view(role, node.current.sensitivity.value):
+        return f"[restricted — {node.current.sensitivity.value}]"
+    return node.mitigation
+
+def _redact_context(node, role: str) -> str:
+    """Redact context summary if the node's sensitivity exceeds the viewer's role."""
+    if not node.context_summary:
+        return ""
+    if not _can_view(role, node.current.sensitivity.value if node.current else "internal"):
+        return f"[restricted — {node.current.sensitivity.value if node.current else 'internal'}]"
+    return node.context_summary
+
 
 def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
               db_path=None, llm=None, vector=None, context_llm=None) -> FastAPI:
@@ -391,7 +435,7 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
         return {"readings": readings, "rows": [list(r) for r in rows]}
 
     @app.get("/node/{node_id}/context")
-    def node_context(node_id: str):
+    def node_context(node_id: str, role: str = "reviewer"):
         """Lazily generate (and cache) an LLM context summary grounded in a
         Chroma vector search over the policy/context docs."""
         if node_id not in store.nodes:
@@ -403,10 +447,10 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
             chunks = eng.vector.query_texts(query, k=3)
             summarizer = context_llm or eng.llm
             node.context_summary = summarizer.summarize(node, chunks)
-        return {"node_id": node_id, "summary": node.context_summary}
+        return {"node_id": node_id, "summary": _redact_context(node, role)}
 
     @app.get("/node/{node_id}/mitigation")
-    def node_mitigation(node_id: str):
+    def node_mitigation(node_id: str, role: str = "reviewer"):
         """Lazily generate (and cache) a mitigation suggestion for a non-leaf
         node whose severity is not LOW. Grounded in vector search over policies."""
         if node_id not in store.nodes:
@@ -421,7 +465,7 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
         if not node.mitigation:
             from .flatten import generate_mitigations
             generate_mitigations(store, eng.llm, eng.vector, [node_id])
-        return {"node_id": node_id, "mitigation": node.mitigation}
+        return {"node_id": node_id, "mitigation": _redact_mitigation(node, role)}
 
     @app.get("/graph-data")
     def graph_data(role: str = "reviewer"):
@@ -506,12 +550,18 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
     # --- Graph Builder endpoints ---
 
     @app.get("/builder/nodes/{node_id}")
-    def get_builder_node(node_id: str):
+    def get_builder_node(node_id: str, role: str = "reviewer"):
         if node_id not in store.nodes:
             from fastapi.responses import JSONResponse
             return JSONResponse(status_code=404, content={"error": "not found"})
         _ensure_assessed()
         node = store.get_node(node_id)
+        inbound = []
+        for pid in store.influence_predecessors(node_id):
+            pn = store.get_node(pid)
+            if pn.outbound_signal:
+                inbound.append(_redact_cause(pn.outbound_signal.model_dump(mode="json"), role))
+        outbound = _redact_cause(node.outbound_signal.model_dump(mode="json") if node.outbound_signal else None, role)
         return {
             "id": node.id, "kind": node.kind.value, "title": node.title,
             "description": node.description,
@@ -520,32 +570,21 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
             "parents": store.parents(node_id),
             "dependencies": store.dependencies(node_id),
             "dependents": store.dependents(node_id),
-            # Direction-correct relationships based on the influence graph:
-            # inputs = what flows into this node (what it depends on);
-            # consumers = what this node flows into (what depends on it).
             "inputs": store.influence_predecessors(node_id),
             "consumers": store.influence_successors(node_id),
-            "context_summary": node.context_summary,
-            "mitigation": node.mitigation,
+            "context_summary": _redact_context(node, role),
+            "mitigation": _redact_mitigation(node, role),
             "severity": node.current.llm_verdict.severity.value if node.current else None,
             "adapter_id": node.data_binding.adapter_id if node.data_binding else "",
             "query": node.data_binding.query if node.data_binding else "",
-            # Hide the internal generic effect_score ladder; show only the real
-            # graded field rules (at most one per severity band).
             "field_rules": [
                 fr.model_dump(mode="json")
                 for fr in (node.data_binding.field_rules if node.data_binding else [])
                 if fr.field not in {"effect_score", "capacity_drop_pct", "single_owner", "data_age_h"}
             ],
             "raw_values": node.data_binding.raw_values if node.data_binding else {},
-            # Inbound = the signals of this node's INPUTS (influence predecessors),
-            # computed live so it is correct regardless of assessment path/order.
-            "inbound_signals": [
-                store.get_node(pid).outbound_signal.model_dump(mode="json")
-                for pid in store.influence_predecessors(node_id)
-                if store.get_node(pid).outbound_signal
-            ],
-            "outbound_signal": node.outbound_signal.model_dump(mode="json") if node.outbound_signal else None,
+            "inbound_signals": inbound,
+            "outbound_signal": outbound,
         }
 
     @app.post("/builder/nodes")
@@ -778,7 +817,7 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
         return {"undone": typ, "description": action["description"]}
 
     @app.get("/builder/graph")
-    def get_builder_graph():
+    def get_builder_graph(role: str = "reviewer"):
         nodes = []
         for nid in store.all_ids():
             n = store.get_node(nid)
@@ -789,8 +828,8 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
                 "delta_accumulator": n.delta_accumulator,
                 "field_rules": [fr.model_dump(mode="json") for fr in (n.data_binding.field_rules if n.data_binding else [])],
                 "raw_values": n.data_binding.raw_values if n.data_binding else {},
-                "mitigation": n.mitigation,
-                "outbound_signal": n.outbound_signal.model_dump(mode="json") if n.outbound_signal else None,
+                "mitigation": _redact_mitigation(n, role),
+                "outbound_signal": _redact_cause(n.outbound_signal.model_dump(mode="json") if n.outbound_signal else None, role),
             })
         edges = [{"src": e.src, "dst": e.dst, "type": e.type.value, "weight": e.weight.value}
                  for e in store._edges]

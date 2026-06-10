@@ -3,6 +3,7 @@ var nodePositions = {};
 var svgEl;
 var viewX=0, viewY=0, viewW=1200, viewH=800, viewScale=1;
 var draggingNode=null, dragOffX=0, dragOffY=0;
+var currentRole=localStorage.getItem("4sight-role")||"reviewer";
 var selectedNode=null;
 var portDrag=null, portLine=null;
 var creatingKind=null;
@@ -27,8 +28,17 @@ function init(){
   window.addEventListener("resize",resizeSVG);
   initPanelResize();
   resizeSVG();
+  var sw=document.getElementById("role-switch");
+  if(sw) sw.checked=(currentRole==="privileged");
   loadGraph();
   updateUndoButton();
+}
+
+function toggleRole(){
+  currentRole=document.getElementById("role-switch").checked?"privileged":"reviewer";
+  localStorage.setItem("4sight-role",currentRole);
+  loadGraph();
+  if(selectedNode) selectNode(selectedNode);
 }
 
 function resizeSVG(){
@@ -80,13 +90,13 @@ function onWheel(e){
 
 var ROOT_ID=null;
 async function loadGraph(){
-  var r=await fetch("/builder/graph"); var d=await r.json();
+  var r=await fetch("/builder/graph?role="+currentRole); var d=await r.json();
   d.nodes.forEach(function(n){graph.nodes[n.id]=n;});
   graph.edges=d.edges.map(function(e){return {src:e.src, dst:e.dst, type:e.type, weight:e.weight||"medium"};});
   if(Object.keys(nodePositions).length===0){
     layoutGraph();
   }
-  try{ ROOT_ID=(await (await fetch("/root")).json()).node_id; }catch(e){}
+  try{ ROOT_ID=(await (await fetch("/root?role="+currentRole)).json()).node_id; }catch(e){}
   renderLeftBar();
   render();
 }
@@ -130,7 +140,7 @@ function lbClick(nid){ switchTab('builder'); selectNode(nid); renderLeftBar(); }
 // ===== Report tab =====
 var reportPath=[];
 async function openReportAtRoot(){
-  if(!ROOT_ID){ try{ ROOT_ID=(await (await fetch("/root")).json()).node_id; }catch(e){} }
+  if(!ROOT_ID){ try{ ROOT_ID=(await (await fetch("/root?role="+currentRole)).json()).node_id; }catch(e){} }
   reportPath=ROOT_ID?[ROOT_ID]:[];
   renderReport();
 }
@@ -150,13 +160,13 @@ async function renderReport(){
       "<span class='crumb"+(last?" cur":"")+"'"+(last?"":" onclick=\"reportNavigate('"+id+"')\"")+">"+esc(title)+"</span>";
   }).join("");
   card.innerHTML="<div class='rpt'><div class='rpt-empty'>Loading...</div></div>";
-  var d=await (await fetch("/builder/nodes/"+nid)).json();
+  var d=await (await fetch("/builder/nodes/"+nid+"?role="+currentRole)).json();
   if(graph.nodes[nid]) graph.nodes[nid].severity=d.severity;
   var sev=d.severity||"none";
   var ctx="";
-  if(!d.query){ try{ ctx=(await (await fetch("/node/"+nid+"/context")).json()).summary; }catch(e){} }
+  if(!d.query){ try{ ctx=(await (await fetch("/node/"+nid+"/context?role="+currentRole)).json()).summary; }catch(e){} }
   var mit=d.mitigation||"";
-  if(!mit&&d.kind!=="leaf"&&sev!=="low"){ try{ mit=(await (await fetch("/node/"+nid+"/mitigation")).json()).mitigation||""; }catch(e){} }
+  if(!mit&&d.kind!=="leaf"&&sev!=="low"){ try{ mit=(await (await fetch("/node/"+nid+"/mitigation?role="+currentRole)).json()).mitigation||""; }catch(e){} }
   var drivers=(d.inputs||[]).map(function(id){
     var n=graph.nodes[id]||{}; var s=n.severity||"none";
     return "<div class='driver' onclick=\"reportNavigate('"+id+"')\">"+
@@ -673,7 +683,7 @@ function selectNode(nid){
   document.getElementById("panel-relations").style.display="block";
   document.getElementById("btn-delete").style.display="block";
   onKindChange();
-  fetch("/builder/nodes/"+nid).then(function(r){return r.json();}).then(function(d){
+  fetch("/builder/nodes/"+nid+"?role="+currentRole).then(function(r){return r.json();}).then(function(d){
     n.description=d.description||n.description||"";
     n.field_rules=d.field_rules||[];
     n.raw_values=d.raw_values||{};
@@ -751,7 +761,7 @@ function saveReadings(){
   document.querySelectorAll("#panel-readings .reading-input").forEach(function(inp){
     var v=parseFloat(inp.value); if(!isNaN(v)) readings[inp.getAttribute("data-field")]=v;
   });
-  fetch("/node/"+selectedNode+"/readings",{method:"POST",headers:{"Content-Type":"application/json"},
+  fetch("/node/"+selectedNode+"/readings?role="+currentRole",{method:"POST",headers:{"Content-Type":"application/json"},
     body:JSON.stringify({readings:readings})})
     .then(function(r){return r.json();}).then(function(d){
       if(graph.nodes[selectedNode]) graph.nodes[selectedNode].raw_values=d.raw_values;
@@ -852,7 +862,7 @@ async function loadNodeContext(nodeId){
   if(!el) return;
   el.textContent="Loading context...";
   try{
-    var r=await fetch("/node/"+nodeId+"/context");
+    var r=await fetch("/node/"+nodeId+"/context?role="+currentRole);
     var d=await r.json();
     el.textContent=d.summary||"No context.";
   }catch(e){ el.textContent=""; }
@@ -863,7 +873,7 @@ async function loadNodeMitigation(nodeId){
   if(!el) return;
   el.innerHTML="<span style='opacity:0.5;'>Loading mitigation...</span>";
   try{
-    var r=await fetch("/node/"+nodeId+"/mitigation");
+    var r=await fetch("/node/"+nodeId+"/mitigation?role="+currentRole);
     var d=await r.json();
     if(d.mitigation){
       el.innerHTML="<span style='color:var(--sev-high);font-weight:600;'>Suggested mitigation:</span> "+esc(d.mitigation);

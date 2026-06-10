@@ -15,6 +15,11 @@
       <button class="tab" data-tab="report" onclick="switchTab('report')">Report</button>
     </div>
     <div class="tools">
+      <label class="role-toggle" title="Toggle between reviewer and privileged admin view">
+        <span id="role-label">Reviewer</span>
+        <input type="checkbox" id="role-switch" onchange="toggleRole()">
+        <span id="role-label-admin">Admin</span>
+      </label>
       <button id="btn-task" onclick="startCreate('task')">+ Task</button>
       <button id="btn-leaf" onclick="startCreate('leaf')">+ Data Source</button>
       <button id="btn-undo" onclick="undo()" disabled title="Undo last action (Ctrl+Z)">↩ Undo</button>

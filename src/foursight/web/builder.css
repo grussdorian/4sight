@@ -38,6 +38,13 @@ h1,h2,h3,h4{font-family:"Space Grotesk",system-ui,sans-serif;letter-spacing:-0.0
 .tools button:hover{border-color:var(--primary);}
 .tools .primary{background:var(--primary);color:#fff;border-color:var(--primary);}
 .tools .primary:hover{background:#1d4ed8;}
+
+/* Role toggle */
+.role-toggle{display:inline-flex;align-items:center;gap:6px;font-size:11px;color:var(--dim);
+  padding:3px 8px;border:1px solid var(--line);border-radius:7px;cursor:pointer;user-select:none;}
+.role-toggle input[type=checkbox]{width:14px;height:14px;cursor:pointer;accent-color:var(--primary);}
+.role-toggle input[type=checkbox]:checked + #role-label-admin{color:var(--primary);font-weight:700;}
+.role-toggle input[type=checkbox]:not(:checked) ~ #role-label{color:var(--primary);font-weight:700;}
 #btn-undo:disabled{opacity:0.35;cursor:default;}
 #btn-undo:disabled:hover{border-color:var(--line);}
 .tools .primary:disabled{opacity:0.6;cursor:default;}
