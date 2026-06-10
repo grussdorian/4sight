@@ -40,10 +40,24 @@ def assessment_from_batch(node: Node, entry: dict) -> Assessment:
     )
 
 
+def input_snapshot(store, node_id: str) -> list:
+    """A compact record of the inputs feeding a node (its predecessors' current
+    signals), used both to anchor the prompt and to key the history."""
+    snap = []
+    for p in store.influence_predecessors(node_id):
+        pn = store.get_node(p)
+        if pn.outbound_signal:
+            snap.append({"id": p, "title": pn.title,
+                         "severity": pn.outbound_signal.severity.value,
+                         "score": round(pn.outbound_signal.score)})
+    return snap
+
+
 class FlattenEngine:
-    def __init__(self, store: GraphStore, vector=None) -> None:
+    def __init__(self, store: GraphStore, vector=None, conn=None) -> None:
         self.store = store
         self.vector = vector
+        self.conn = conn
 
     def _input_weight(self, pred: str, node_id: str) -> str:
         # The stored edge between an input and a node may be in either
@@ -118,9 +132,26 @@ class FlattenEngine:
                 snippet = chunks[0].replace("\n", " ").strip()[:240]
                 lines.append(f"Context: {snippet}")
 
-        # Deliberately NOT including this node's own previous score: the prompt is
-        # then a pure function of structure + data, so temperature-0 output is
-        # stable across re-runs when nothing changed.
+        # Past judgments anchor this node so it does not drift: identical inputs
+        # should reproduce the same severity it gave before.
+        if self.conn is not None:
+            try:
+                from .db import read_history
+                hist = read_history(self.conn, node.id)
+            except Exception:
+                hist = []
+            if hist:
+                hl = []
+                for h in hist[-6:]:
+                    ins = ", ".join(f"{i.get('title', i.get('id'))}={i['severity']}/{i['score']}"
+                                    for i in h["inputs"]) or "(none)"
+                    hl.append(f"  inputs[{ins}] -> {h['severity']}")
+                lines.append("Past judgments (reproduce the same severity for matching inputs):\n"
+                             + "\n".join(hl))
+
+        # Deliberately NOT including this node's own previous score directly: the
+        # prompt stays a pure function of structure + data + history, so
+        # temperature-0 output is stable across re-runs when nothing changed.
         return "\n".join(lines)
 
     def flatten_full(self) -> str:
@@ -149,7 +180,12 @@ class FlattenEngine:
             "input keeps risk elevated; redundancy (several inputs, only one bad) "
             "mitigates it.\n"
             "- Be consistent and deterministic: identical inputs must yield the "
-            "same score. Do not invent volatility that the data does not show.\n\n"
+            "same score. Do not invent volatility that the data does not show.\n"
+            "- A node may list 'Past judgments' (prior inputs -> severity). Honor "
+            "them: if the current inputs match a past case, output the SAME "
+            "severity. Only deviate when the inputs genuinely differ from every "
+            "past case, so a node does not drift when an upstream value returns "
+            "to a level it saw before.\n\n"
             "For every node return an object: node_id, final_score (0-100), severity "
             "(low/medium/high/critical), rationale (ONE short clause, <= 15 words). "
             "Reply with ONLY a compact JSON array of these objects, one per node "

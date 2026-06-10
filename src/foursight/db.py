@@ -35,8 +35,57 @@ def init_db(conn: sqlite3.Connection) -> None:
         CREATE TABLE IF NOT EXISTS ferry_prices (
             route TEXT PRIMARY KEY, price REAL, updated_at TEXT
         );
+        CREATE TABLE IF NOT EXISTS node_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            node_id TEXT NOT NULL, inputs_json TEXT NOT NULL,
+            severity TEXT, score REAL, rationale TEXT, ts TEXT
+        );
     """)
     conn.commit()
+
+
+HISTORY_LIMIT = 8
+
+
+def record_history(conn: sqlite3.Connection, node_id: str, inputs: list,
+                   severity: str, score: float, rationale: str) -> None:
+    """Append a node's judgment (inputs -> severity) to its history, keeping the
+    last HISTORY_LIMIT entries. Skips a record whose input signature matches the
+    most recent one (only changed contexts are stored)."""
+    import json
+    from datetime import datetime, timezone
+    sig = json.dumps(inputs, sort_keys=True)
+    last = conn.execute(
+        "SELECT inputs_json, severity FROM node_history WHERE node_id=? ORDER BY id DESC LIMIT 1",
+        (node_id,)).fetchone()
+    if last and last[0] == sig and last[1] == severity:
+        return
+    conn.execute(
+        "INSERT INTO node_history(node_id, inputs_json, severity, score, rationale, ts) "
+        "VALUES(?,?,?,?,?,?)",
+        (node_id, sig, severity, float(score), rationale,
+         datetime.now(timezone.utc).isoformat()))
+    conn.execute(
+        "DELETE FROM node_history WHERE node_id=? AND id NOT IN "
+        "(SELECT id FROM node_history WHERE node_id=? ORDER BY id DESC LIMIT ?)",
+        (node_id, node_id, HISTORY_LIMIT))
+    conn.commit()
+
+
+def read_history(conn: sqlite3.Connection, node_id: str) -> list[dict]:
+    """The node's recent judgments, oldest first."""
+    import json
+    rows = conn.execute(
+        "SELECT inputs_json, severity, score, rationale FROM node_history "
+        "WHERE node_id=? ORDER BY id ASC", (node_id,)).fetchall()
+    out = []
+    for inputs_json, severity, score, rationale in rows:
+        try:
+            inputs = json.loads(inputs_json)
+        except Exception:
+            inputs = []
+        out.append({"inputs": inputs, "severity": severity, "score": score, "rationale": rationale})
+    return out
 
 
 def seed_ferry_prices(conn: sqlite3.Connection) -> None:

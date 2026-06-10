@@ -81,9 +81,10 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
         if getattr(getattr(eng, "llm", None), "model", "fake") == "fake":
             eng.run_crawl(list(dirty), TriggerType.NODE_FIRED)
         else:
-            from .flatten import FlattenEngine, assessment_from_batch
+            from .flatten import FlattenEngine, assessment_from_batch, input_snapshot
             from .reports import static_report
-            flat = FlattenEngine(store, eng.vector)
+            from .db import record_history
+            flat = FlattenEngine(store, eng.vector, conn)
             system, messages = flat.build_batch_prompt(scope=scope)
             try:
                 raw = eng.llm.batch_assess(system, messages[0]["content"])
@@ -109,6 +110,16 @@ def build_app(seed_fn=None, get_report_fn=None, trace_fn=None,
             for node in applied:
                 try:
                     static_report(node, store)
+                except Exception:
+                    continue
+            # Record each node's (inputs -> severity) judgment now that every
+            # node in the batch has its fresh signal -- anchors future scoring.
+            for node in applied:
+                try:
+                    record_history(conn, node.id, input_snapshot(store, node.id),
+                                   node.current.llm_verdict.severity.value,
+                                   node.current.llm_verdict.final_score,
+                                   node.current.llm_verdict.rationale)
                 except Exception:
                     continue
         _dirty.clear()

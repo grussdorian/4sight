@@ -128,3 +128,13 @@ def test_no_change_means_no_rescore():
     calls = spy.batch_calls
     c.post("/assess")  # nothing changed
     assert spy.batch_calls == calls, "re-assessment with no change must not call the LLM"
+
+
+def test_history_is_recorded_and_anchors_prompt():
+    spy = SpyLLM(severity="critical")
+    c = TestClient(build_app(seed_fn=load_supply_chain, llm=spy))
+    c.post("/assess")            # records each node's judgment
+    spy.prompts.clear()
+    c.post("/node/sumco_yield/readings", json={"readings": {"yield_pct": 40}})
+    c.post("/assess")            # re-score cone; prompt should carry past judgments
+    assert any("Past judgments" in p for p in spy.prompts), "history not fed back into the prompt"

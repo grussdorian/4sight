@@ -69,3 +69,23 @@ def test_save_load_preserves_query_and_sensitivity():
     assert binding.query.startswith("SELECT field, value")
     assert binding.sensitivity == Sensitivity.CONFIDENTIAL
     assert binding.field_rules[0].field == "yield_pct"
+
+
+def test_node_history_caps_and_dedups():
+    import sqlite3
+    from foursight.db import init_db, record_history, read_history
+    conn = sqlite3.connect(":memory:")
+    init_db(conn)
+    # 10 distinct contexts -> keep last 8
+    for i in range(10):
+        record_history(conn, "pkg", [{"id": "alice", "severity": "low", "score": i}], "low", float(i), "r")
+    h = read_history(conn, "pkg")
+    assert len(h) == 8
+    assert h[-1]["score"] == 9.0  # newest kept, oldest dropped
+    # repeating the current context is skipped (only changed contexts stored)
+    n = len(read_history(conn, "pkg"))
+    record_history(conn, "pkg", [{"id": "alice", "severity": "low", "score": 9}], "low", 9.0, "r")
+    assert len(read_history(conn, "pkg")) == n  # unchanged
+    # a changed context is recorded
+    record_history(conn, "pkg", [{"id": "alice", "severity": "critical", "score": 40}], "critical", 70.0, "r")
+    assert read_history(conn, "pkg")[-1]["severity"] == "critical"
